@@ -6,11 +6,8 @@ metadata:
   labels:
     app.kubernetes.io/name: servitium
 spec:
-  type: LoadBalancer
+  type: ClusterIP
+  externalIPs:
+    - 192.168.21.2
   selector:
     app.kubernetes.io/name: servitium
-  ports:
-    - name: http
-      port: 8099
-      protocol: TCP
-      targetPort: http

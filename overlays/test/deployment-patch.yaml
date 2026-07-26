@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servitium
+  labels:
+    app.kubernetes.io/name: servitium
+    app.kubernetes.io/instance: test
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: servitium
+      app.kubernetes.io/instance: test
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: servitium
+        app.kubernetes.io/instance: test
+    spec:
+      containers:
+        - name: servitium
+          env:
+            - name: PORT
+              value: "8098"
+            - name: MYSQL_DATABASE
+              value: servitium_test
+            - name: MYSQL_USER
+              value: servitium-test
+          ports:
+            - name: http
+              containerPort: 8098
+              protocol: TCP
+          volumeMounts:
+            - name: servitium-test-secrets
+              mountPath: /run/secrets/servitium
+              readOnly: true
+      volumes:
+        - name: servitium-test-secrets
+          secret:
+            secretName: servitium-test-secrets
+            defaultMode: 256
+            items:
+              - key: bot-token
+                path: discord-bot-token
+              - key: password
+                path: mysql-password
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-wireguard-http
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: servitium
+      app.kubernetes.io/instance: test
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.168.21.0/24
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - port: 8098
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: servitium
+      app.kubernetes.io/instance: test
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mysql-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: servitium
+      app.kubernetes.io/instance: test

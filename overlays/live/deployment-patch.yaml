@@ -1,0 +1,60 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servitium
+spec:
+  template:
+    spec:
+      containers:
+        - name: servitium
+          env:
+            - name: PORT
+              value: "8099"
+            - name: MYSQL_DATABASE
+              value: servitium
+            - name: MYSQL_USER
+              value: servitium
+          ports:
+            - name: http
+              containerPort: 8099
+              protocol: TCP
+          volumeMounts:
+            - name: servitium-secrets
+              mountPath: /run/secrets/servitium
+              readOnly: true
+      volumes:
+        - name: servitium-secrets
+          secret:
+            secretName: servitium-secrets
+            defaultMode: 256
+            items:
+              - key: bot-token
+                path: discord-bot-token
+              - key: password
+                path: mysql-password
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-wireguard-http
+spec:
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.168.21.0/24
+        - ipBlock:
+            cidr: 192.168.1.0/24
+      ports:
+        - port: 8099
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mysql-egress

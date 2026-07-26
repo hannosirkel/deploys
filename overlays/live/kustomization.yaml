@@ -2,12 +2,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: servitium
+nameSuffix: ""
 resources:
-  - namespace.yaml
-  - deployment.yaml
-  - service.yaml
-  - networkpolicy.yaml
+  - ../../base
 images:
   - name: ghcr.io/hannosirkel/servitium
     newName: ghcr.io/hannosirkel/servitium
-    digest: sha256:bf7f4cbbe04eaa49c2dd75e0abbc251424ee5de53b244f2f2a41ec22e37ac519
+    digest: sha256:a3c144eb379bd6a0edd6cf88ddc70250e0174d7e5d3b1ad96499a36d73359fd4
+patches:
+  - path: deployment-patch.yaml
+  - path: service-patch.yaml

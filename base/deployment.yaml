@@ -35,14 +35,6 @@ spec:
               value: mysql.mysql.svc.cluster.local
             - name: MYSQL_PORT
               value: "3306"
-            - name: MYSQL_DATABASE
-              value: servitium
-            - name: MYSQL_USER
-              value: servitium
-          ports:
-            - name: http
-              containerPort: 8099
-              protocol: TCP
           readinessProbe:
             httpGet:
               path: /healthz
@@ -75,17 +67,3 @@ spec:
             runAsNonRoot: true
             runAsUser: 10001
             runAsGroup: 10001
-          volumeMounts:
-            - name: servitium-secrets
-              mountPath: /run/secrets/servitium
-              readOnly: true
-      volumes:
-        - name: servitium-secrets
-          secret:
-            secretName: servitium-secrets
-            defaultMode: 256
-            items:
-              - key: bot-token
-                path: discord-bot-token
-              - key: password
-                path: mysql-password
