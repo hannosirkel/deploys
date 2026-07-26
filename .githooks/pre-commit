@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "commit rejected: gitleaks is required" >&2
+  exit 1
+fi
+
+if ! gitleaks git --pre-commit --staged --redact --no-banner; then
+  echo "commit rejected: staged changes contain a potential secret" >&2
+  exit 1
+fi
