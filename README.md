@@ -30,3 +30,7 @@ bash tests/manifests.sh
 kubectl kustomize overlays/live >/dev/null
 kubectl kustomize overlays/test >/dev/null
 ```
+
+The `Validate` workflow runs the same overlay checks for pull requests and
+pushes to `main`. The repository root is shared GitOps state, not a deployable
+Kustomization.

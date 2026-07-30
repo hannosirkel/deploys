@@ -22,4 +22,5 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/manifests.sh
-          kubectl kustomize . >/dev/null
+          kubectl kustomize overlays/live >/dev/null
+          kubectl kustomize overlays/test >/dev/null
