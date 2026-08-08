@@ -21,6 +21,6 @@ jobs:
       - name: Validate rendered manifests
         run: |
           set -euo pipefail
-          bash tests/manifests.sh
-          kubectl kustomize overlays/live >/dev/null
-          kubectl kustomize overlays/test >/dev/null
+          bash servitium/tests/manifests.sh
+          kubectl kustomize servitium/overlays/live >/dev/null
+          kubectl kustomize servitium/overlays/test >/dev/null

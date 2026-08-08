@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf -- "$temporary"' EXIT
 
@@ -9,7 +9,7 @@ cd "$repo_root"
 
 for environment in live test; do
   rendered="$temporary/$environment.yaml"
-  kubectl kustomize "overlays/$environment" >"$rendered"
+  kubectl kustomize "servitium/overlays/$environment" >"$rendered"
   test "$(grep -c 'image: ghcr.io/hannosirkel/servitium@sha256:' "$rendered")" -eq 1
   ! grep -q 'sha256:0000000000000000000000000000000000000000000000000000000000000000' "$rendered"
 done
