@@ -1,0 +1,90 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plepic-backend
+  labels: &labels
+    app.kubernetes.io/name: plepic-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: plepic
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plepic-backend
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: ghcr.io/hannosirkel/plepic-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          args: [npm, run, start]
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: DATABASE_HOST, value: plepic-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: plepic}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            - {name: REDIS_HOST, value: plepic-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: REDIS_PASSWORD}}
+            - name: COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: COOKIE_SECRET}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: JWT_SECRET}}
+            - {name: SMTP_HOST, value: smtp.invalid}
+            - {name: SMTP_PORT, value: "587"}
+            - name: SMTP_USERNAME
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_USERNAME}}
+            - name: SMTP_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_PASSWORD}}
+            - name: NEWSLETTER_API_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: NEWSLETTER_API_KEY}}
+            - name: NEWSLETTER_LIST_ID
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: NEWSLETTER_LIST_ID}}
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: TURNSTILE_SECRET_KEY}}
+            - name: STRIPE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_SECRET_KEY}}
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+          readinessProbe: &probe
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            <<: *probe
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: assets, mountPath: /app/static}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: assets
+          persistentVolumeClaim: {claimName: plepic-assets}
+        - name: tmp
+          emptyDir: {}

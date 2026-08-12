@@ -1,0 +1,109 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: plepic
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/hannosirkel/plepic-backend
+    newName: ghcr.io/hannosirkel/plepic-backend
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/hannosirkel/plepic-storefront
+    newName: ghcr.io/hannosirkel/plepic-storefront
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  - target:
+      kind: Service
+      name: plepic-storefront
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8101
+  - target:
+      kind: Service
+      name: plepic-backend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8102
+  - target:
+      kind: PersistentVolumeClaim
+      name: plepic-postgresql
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 20Gi
+  - target:
+      kind: PersistentVolumeClaim
+      name: plepic-redis
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 2Gi
+  - target:
+      kind: PersistentVolumeClaim
+      name: plepic-assets
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 10Gi
+  - target:
+      kind: Deployment|StatefulSet|Job
+      labelSelector: app.kubernetes.io/part-of=plepic
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+  - target:
+      kind: Deployment
+      name: plepic-backend
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: plepic-backend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - {name: DATABASE_NAME, value: plepic}
+                  - {name: SMTP_HOST, value: smtp-live.invalid}
+  - target:
+      kind: Deployment
+      name: plepic-storefront
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: plepic-storefront
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storefront
+                env:
+                  - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:8102"}
+  - target:
+      kind: Deployment
+      name: plepic-worker
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: plepic-worker
+      spec:
+        template:
+          spec:
+            containers:
+              - name: worker
+                env:
+                  - {name: DATABASE_NAME, value: plepic}
+                  - {name: SMTP_HOST, value: smtp-live.invalid}

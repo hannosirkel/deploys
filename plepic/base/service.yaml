@@ -1,0 +1,46 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plepic-postgresql
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: plepic-postgresql}
+  ports:
+    - {name: postgresql, port: 5432, targetPort: postgresql, protocol: TCP}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plepic-redis
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: plepic-redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis, protocol: TCP}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plepic-backend
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  type: ClusterIP
+  externalIPs: [192.168.21.2]
+  selector: {app.kubernetes.io/name: plepic-backend}
+  ports:
+    - {name: http, port: 9000, targetPort: http, protocol: TCP}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plepic-storefront
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  type: ClusterIP
+  externalIPs: [192.168.21.2]
+  selector: {app.kubernetes.io/name: plepic-storefront}
+  ports:
+    - {name: http, port: 3000, targetPort: http, protocol: TCP}

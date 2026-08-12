@@ -24,3 +24,6 @@ jobs:
           bash servitium/tests/manifests.sh
           kubectl kustomize servitium/overlays/live >/dev/null
           kubectl kustomize servitium/overlays/test >/dev/null
+          bash plepic/tests/manifests.sh
+          kubectl kustomize plepic/overlays/live >/dev/null
+          kubectl kustomize plepic/overlays/test >/dev/null

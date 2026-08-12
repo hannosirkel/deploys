@@ -1,0 +1,62 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plepic-storefront
+  labels: &labels
+    app.kubernetes.io/name: plepic-storefront
+    app.kubernetes.io/component: storefront
+    app.kubernetes.io/part-of: plepic
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plepic-storefront
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: storefront
+          image: ghcr.io/hannosirkel/plepic-storefront:unpublished
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 3000, protocol: TCP}
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:9000"}
+            - name: MEDUSA_PUBLISHABLE_KEY
+              valueFrom: {secretKeyRef: {name: plepic-publishable-key, key: publishableKey}}
+            - name: STRIPE_PUBLISHABLE_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+            - name: TURNSTILE_SITE_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: TURNSTILE_SITE_KEY}}
+          readinessProbe: &probe
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            <<: *probe
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: next-cache, mountPath: /app/.next/cache}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
