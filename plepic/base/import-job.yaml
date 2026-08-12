@@ -9,6 +9,8 @@ metadata:
     app.kubernetes.io/part-of: plepic
   annotations:
     argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/ignore-healthcheck: "true"
+    argocd.argoproj.io/sync-options: Force=true,Replace=true
 spec:
   suspend: true
   backoffLimit: 0
