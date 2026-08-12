@@ -110,7 +110,9 @@ patches:
             containers:
               - name: backend
                 env:
+                  - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
+                  - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
@@ -148,7 +150,9 @@ patches:
             containers:
               - name: worker
                 env:
+                  - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
+                  - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
@@ -176,6 +180,7 @@ patches:
             containers:
               - name: storefront
                 env:
+                  - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend-test:8112"}
                   - name: MEDUSA_PUBLISHABLE_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY
@@ -196,6 +201,7 @@ patches:
             containers:
               - name: predeploy
                 env:
+                  - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
@@ -219,6 +225,7 @@ patches:
             containers:
               - name: catalogue-import
                 env:
+                  - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}

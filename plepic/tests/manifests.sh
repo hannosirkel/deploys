@@ -82,6 +82,7 @@ def assert_network_contract(documents, suffix)
   raise 'default deny policy types mismatch' unless deny.dig('spec', 'policyTypes').sort == %w[Egress Ingress]
 
   storefront_ingress = resource(documents, 'NetworkPolicy', "allow-storefront-ingress#{suffix}")
+  raise 'storefront ingress policy type mismatch' unless storefront_ingress.dig('spec', 'policyTypes') == ['Ingress']
   raise 'storefront ingress selector mismatch' unless storefront_ingress.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'storefront',
   }
@@ -91,6 +92,7 @@ def assert_network_contract(documents, suffix)
   }]
 
   backend_ingress = resource(documents, 'NetworkPolicy', "allow-backend-ingress#{suffix}")
+  raise 'backend ingress policy type mismatch' unless backend_ingress.dig('spec', 'policyTypes') == ['Ingress']
   raise 'backend ingress selector mismatch' unless backend_ingress.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'backend',
   }
@@ -108,24 +110,31 @@ def assert_network_contract(documents, suffix)
   ]
 
   postgresql = resource(documents, 'NetworkPolicy', "allow-postgresql-ingress#{suffix}")
+  raise 'PostgreSQL ingress policy type mismatch' unless postgresql.dig('spec', 'policyTypes') == ['Ingress']
   raise 'PostgreSQL ingress selector mismatch' unless postgresql.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'postgresql',
   }
-  postgresql_peers = postgresql.dig('spec', 'ingress', 0, 'from').map do |peer|
-    peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/component')
-  end.sort
-  raise 'PostgreSQL peer set mismatch' unless postgresql_peers == %w[backend backup catalogue-import predeploy recovery worker]
+  raise 'PostgreSQL ingress mismatch' unless postgresql.dig('spec', 'ingress') == [{
+    'from' => %w[backend worker predeploy catalogue-import backup recovery].map do |component|
+      { 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => component } } }
+    end,
+    'ports' => [{ 'port' => 5432, 'protocol' => 'TCP' }],
+  }]
 
   redis = resource(documents, 'NetworkPolicy', "allow-redis-ingress#{suffix}")
+  raise 'Redis ingress policy type mismatch' unless redis.dig('spec', 'policyTypes') == ['Ingress']
   raise 'Redis ingress selector mismatch' unless redis.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'redis',
   }
-  redis_peers = redis.dig('spec', 'ingress', 0, 'from').map do |peer|
-    peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/component')
-  end.sort
-  raise 'Redis peer set mismatch' unless redis_peers == %w[backend worker]
+  raise 'Redis ingress mismatch' unless redis.dig('spec', 'ingress') == [{
+    'from' => %w[backend worker].map do |component|
+      { 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => component } } }
+    end,
+    'ports' => [{ 'port' => 6379, 'protocol' => 'TCP' }],
+  }]
 
   dns = resource(documents, 'NetworkPolicy', "allow-dns-egress#{suffix}")
+  raise 'DNS egress policy type mismatch' unless dns.dig('spec', 'policyTypes') == ['Egress']
   raise 'DNS egress must select all pods' unless dns.dig('spec', 'podSelector') == {}
   raise 'DNS egress mismatch' unless dns.dig('spec', 'egress') == [{
     'to' => [{
@@ -136,21 +145,35 @@ def assert_network_contract(documents, suffix)
   }]
 
   postgresql_egress = resource(documents, 'NetworkPolicy', "allow-postgresql-egress#{suffix}")
-  raise 'PostgreSQL egress peer mismatch' unless postgresql_egress.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
-    %w[backend backup catalogue-import predeploy recovery worker]
-  raise 'PostgreSQL egress port mismatch' unless postgresql_egress.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 5432, 'protocol' => 'TCP' }]
-  raise 'PostgreSQL egress destination mismatch' unless postgresql_egress.dig('spec', 'egress', 0, 'to') == [{
-    'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'postgresql' } },
+  raise 'PostgreSQL egress policy type mismatch' unless postgresql_egress.dig('spec', 'policyTypes') == ['Egress']
+  raise 'PostgreSQL egress selector mismatch' unless postgresql_egress.dig('spec', 'podSelector') == {
+    'matchExpressions' => [{
+      'key' => 'app.kubernetes.io/component',
+      'operator' => 'In',
+      'values' => %w[backend worker predeploy catalogue-import backup recovery],
+    }],
+  }
+  raise 'PostgreSQL egress mismatch' unless postgresql_egress.dig('spec', 'egress') == [{
+    'to' => [{ 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'postgresql' } } }],
+    'ports' => [{ 'port' => 5432, 'protocol' => 'TCP' }],
   }]
 
   redis_egress = resource(documents, 'NetworkPolicy', "allow-redis-egress#{suffix}")
-  raise 'Redis egress peer mismatch' unless redis_egress.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backend worker]
-  raise 'Redis egress port mismatch' unless redis_egress.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 6379, 'protocol' => 'TCP' }]
-  raise 'Redis egress destination mismatch' unless redis_egress.dig('spec', 'egress', 0, 'to') == [{
-    'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'redis' } },
+  raise 'Redis egress policy type mismatch' unless redis_egress.dig('spec', 'policyTypes') == ['Egress']
+  raise 'Redis egress selector mismatch' unless redis_egress.dig('spec', 'podSelector') == {
+    'matchExpressions' => [{
+      'key' => 'app.kubernetes.io/component',
+      'operator' => 'In',
+      'values' => %w[backend worker],
+    }],
+  }
+  raise 'Redis egress mismatch' unless redis_egress.dig('spec', 'egress') == [{
+    'to' => [{ 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'redis' } } }],
+    'ports' => [{ 'port' => 6379, 'protocol' => 'TCP' }],
   }]
 
   storefront_egress = resource(documents, 'NetworkPolicy', "allow-storefront-backend-egress#{suffix}")
+  raise 'storefront egress policy type mismatch' unless storefront_egress.dig('spec', 'policyTypes') == ['Egress']
   raise 'storefront egress selector mismatch' unless storefront_egress.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'storefront',
   }
@@ -160,14 +183,30 @@ def assert_network_contract(documents, suffix)
   }]
 
   smtp = resource(documents, 'NetworkPolicy', "allow-smtp-submission-egress#{suffix}")
-  raise 'SMTP workload peer set mismatch' unless smtp.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backend worker]
+  raise 'SMTP egress policy type mismatch' unless smtp.dig('spec', 'policyTypes') == ['Egress']
+  raise 'SMTP workload selector mismatch' unless smtp.dig('spec', 'podSelector') == {
+    'matchExpressions' => [{
+      'key' => 'app.kubernetes.io/component',
+      'operator' => 'In',
+      'values' => %w[backend worker],
+    }],
+  }
   smtp_cidr = smtp.dig('spec', 'egress', 0, 'to', 0, 'ipBlock', 'cidr')
   raise 'SMTP patch seam must be a private /32' unless smtp_cidr&.match?(%r{\A(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d+\.\d+/32\z})
-  raise 'SMTP submission port mismatch' unless smtp.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 587, 'protocol' => 'TCP' }]
+  raise 'SMTP submission egress mismatch' unless smtp.dig('spec', 'egress') == [{
+    'to' => [{ 'ipBlock' => { 'cidr' => smtp_cidr } }],
+    'ports' => [{ 'port' => 587, 'protocol' => 'TCP' }],
+  }]
 
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
-  raise 'HTTPS workload peer set mismatch' unless https.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
-    %w[backend catalogue-import predeploy storefront worker]
+  raise 'HTTPS egress policy type mismatch' unless https.dig('spec', 'policyTypes') == ['Egress']
+  raise 'HTTPS workload selector mismatch' unless https.dig('spec', 'podSelector') == {
+    'matchExpressions' => [{
+      'key' => 'app.kubernetes.io/component',
+      'operator' => 'In',
+      'values' => %w[backend worker storefront predeploy catalogue-import],
+    }],
+  }
   raise 'HTTPS broad egress mismatch' unless https.dig('spec', 'egress') == [{
     'to' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0' } }],
     'ports' => [{ 'port' => 443, 'protocol' => 'TCP' }],
@@ -242,20 +281,34 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     end
   end
 
+  expected_service_names = %w[postgresql redis backend storefront].map { |component| "plepic-#{component}#{suffix}" }.sort
+  actual_services = documents.select { |document| document['kind'] == 'Service' }
+  raise 'Service set mismatch' unless actual_services.map { |service| service.dig('metadata', 'name') }.sort == expected_service_names
+  actual_services.each do |service|
+    raise 'every Service must be ClusterIP' unless service.dig('spec', 'type') == 'ClusterIP'
+    raise 'NodePort field is forbidden' if service.dig('spec', 'ports').any? { |port| port.key?('nodePort') }
+    forbidden_service_keys = %w[externalName loadBalancerIP loadBalancerClass]
+    raise 'forbidden Service exposure field' if forbidden_service_keys.any? { |key| service.fetch('spec').key?(key) }
+  end
+
   externally_reachable = %w[storefront backend].to_h do |component|
     service = resource(documents, 'Service', "plepic-#{component}#{suffix}")
-    raise 'externally reachable service must remain ClusterIP' unless service.dig('spec', 'type') == 'ClusterIP'
     raise 'WireGuard externalIP mismatch' unless service.dig('spec', 'externalIPs') == ['192.168.21.2']
-    raise 'NodePort is forbidden' if service.dig('spec', 'ports').any? { |port| port.key?('nodePort') }
-    [component, service.dig('spec', 'ports', 0, 'port')]
+    port = ports.fetch(component)
+    raise 'external Service port contract mismatch' unless service.dig('spec', 'ports') == [{
+      'name' => 'http', 'port' => port, 'protocol' => 'TCP', 'targetPort' => 'http',
+    }]
+    [component, port]
   end
   raise 'external service port mismatch' unless externally_reachable == ports
   %w[postgresql redis].each do |component|
     service = resource(documents, 'Service', "plepic-#{component}#{suffix}")
-    raise 'data service must remain ClusterIP' unless service.dig('spec', 'type') == 'ClusterIP'
     raise 'data service externalIP is forbidden' if service.fetch('spec').key?('externalIPs')
+    port = component == 'postgresql' ? 5432 : 6379
+    raise 'data Service port contract mismatch' unless service.dig('spec', 'ports') == [{
+      'name' => component, 'port' => port, 'protocol' => 'TCP', 'targetPort' => component,
+    }]
   end
-  raise 'LoadBalancer service is forbidden' if documents.any? { |document| document['kind'] == 'Service' && document.dig('spec', 'type') == 'LoadBalancer' }
 
   postgresql = resource(documents, 'StatefulSet', "plepic-postgresql#{suffix}")
   redis = resource(documents, 'StatefulSet', "plepic-redis#{suffix}")
@@ -303,6 +356,32 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   end
   pg_container = pod_spec(postgresql).dig('containers', 0)
   raise 'PostgreSQL application database mismatch' unless env_value(pg_container, 'POSTGRES_APPLICATION_DATABASE') == database
+
+  service_ports = actual_services.to_h do |service|
+    [service.dig('metadata', 'name'), service.dig('spec', 'ports', 0, 'port').to_s]
+  end
+  endpoint_workloads = {
+    "plepic-backend#{suffix}" => %w[DATABASE REDIS],
+    "plepic-worker#{suffix}" => %w[DATABASE REDIS],
+    "plepic-predeploy#{suffix}" => %w[DATABASE],
+    "plepic-catalogue-import#{suffix}" => %w[DATABASE],
+  }
+  endpoint_workloads.each do |name, endpoint_types|
+    kind = name.include?('predeploy') || name.include?('catalogue-import') ? 'Job' : 'Deployment'
+    environment = pod_spec(resource(documents, kind, name)).dig('containers', 0, 'env').to_h do |entry|
+      [entry['name'], entry['value']]
+    end
+    endpoint_types.each do |endpoint_type|
+      host = environment.fetch("#{endpoint_type}_HOST")
+      port = environment.fetch("#{endpoint_type}_PORT")
+      raise "#{name} has dangling #{endpoint_type} Service endpoint" unless service_ports[host] == port
+    end
+  end
+  storefront_environment = pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}"))
+    .dig('containers', 0, 'env').to_h { |entry| [entry['name'], entry['value']] }
+  backend_url = URI(storefront_environment.fetch('MEDUSA_BACKEND_URL'))
+  raise 'storefront has dangling backend Service endpoint' unless
+    backend_url.scheme == 'http' && service_ports[backend_url.host] == backend_url.port.to_s
 
   secret_references = Hash.new { |hash, key| hash[key] = [] }
   documents.each do |document|
@@ -353,6 +432,8 @@ end
 
 require 'ipaddr'
 require 'set'
+require 'tempfile'
+require 'uri'
 
 live_resources = {
   'postgresql' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
@@ -375,8 +456,8 @@ test_resources = {
 runtime_keys = %w[COOKIE_SECRET DATABASE_PASSWORD JWT_SECRET NEWSLETTER_API_KEY NEWSLETTER_LIST_ID REDIS_PASSWORD SMTP_PASSWORD SMTP_USERNAME STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET TURNSTILE_SECRET_KEY TURNSTILE_SITE_KEY]
 admin_keys = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD POSTGRES_SUPERUSER_PASSWORD]
 
-live = assert_manifest(
-  ARGV.fetch(0), environment: 'live', namespace: 'plepic', suffix: '',
+live_options = {
+  environment: 'live', namespace: 'plepic', suffix: '',
   ports: { 'storefront' => 8101, 'backend' => 8102 }, database: 'plepic',
   secrets: {
     'plepic-runtime-credentials' => runtime_keys,
@@ -385,9 +466,9 @@ live = assert_manifest(
   },
   pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
   resources: live_resources,
-)
-test = assert_manifest(
-  ARGV.fetch(1), environment: 'test', namespace: 'plepic-test', suffix: '-test',
+}
+test_options = {
+  environment: 'test', namespace: 'plepic-test', suffix: '-test',
   ports: { 'storefront' => 8111, 'backend' => 8112 }, database: 'plepic_test',
   secrets: {
     'plepic-test-runtime-credentials' => runtime_keys,
@@ -396,11 +477,57 @@ test = assert_manifest(
   },
   pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
   resources: test_resources,
-)
+}
+
+live = assert_manifest(ARGV.fetch(0), **live_options)
+test = assert_manifest(ARGV.fetch(1), **test_options)
 
 %i[names pvcs secrets services ports databases].each do |boundary|
   overlap = live.fetch(boundary) & test.fetch(boundary)
   raise "live and test share #{boundary}: #{overlap.to_a.inspect}" unless overlap.empty?
+end
+
+def assert_mutation_rejected(source_path, options, description, expected_error)
+  documents = YAML.load_stream(File.read(source_path)).compact
+  yield documents
+  Tempfile.create(['plepic-manifest-mutation', '.yaml']) do |temporary|
+    temporary.write(YAML.dump_stream(*documents))
+    temporary.flush
+    begin
+      assert_manifest(temporary.path, **options)
+    rescue StandardError => error
+      raise "#{description} failed for the wrong reason: #{error.message}" unless error.message.include?(expected_error)
+      return
+    end
+  end
+  raise "positive control was accepted: #{description}"
+end
+
+assert_mutation_rejected(ARGV.fetch(1), test_options, 'extra NodePort Service', 'Service set mismatch') do |documents|
+  documents << {
+    'apiVersion' => 'v1',
+    'kind' => 'Service',
+    'metadata' => {
+      'name' => 'rogue-nodeport',
+      'namespace' => 'plepic-test',
+      'annotations' => { 'argocd.argoproj.io/sync-wave' => '-20' },
+    },
+    'spec' => {
+      'type' => 'NodePort',
+      'selector' => {},
+      'ports' => [{ 'port' => 9999, 'targetPort' => 9999, 'nodePort' => 30_999 }],
+    },
+  }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options, 'extra broad PostgreSQL ingress', 'PostgreSQL ingress mismatch'
+) do |documents|
+  postgresql = resource(documents, 'NetworkPolicy', 'allow-postgresql-ingress-test')
+  postgresql.fetch('spec').fetch('ingress') << {
+    'from' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0' } }],
+    'ports' => [{ 'port' => 5432, 'protocol' => 'TCP' }],
+  }
 end
 
 puts 'Plepic manifest contract tests passed'

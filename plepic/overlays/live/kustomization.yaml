@@ -78,6 +78,21 @@ patches:
                   - {name: SMTP_HOST, value: smtp-live.invalid}
   - target:
       kind: Deployment
+      name: plepic-storefront
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: plepic-storefront
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storefront
+                env:
+                  - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:8102"}
+  - target:
+      kind: Deployment
       name: plepic-worker
     patch: |-
       apiVersion: apps/v1
