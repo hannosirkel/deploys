@@ -397,6 +397,29 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'ESO Secret names or keys mismatch' unless normalized_references == secrets.transform_values(&:sort)
   raise 'deploys must not render Secrets' if documents.any? { |document| document['kind'] == 'Secret' }
 
+  predeploy_references = pod_spec(predeploy).dig('containers', 0, 'env').filter_map do |entry|
+    reference = entry.dig('valueFrom', 'secretKeyRef')
+    [reference['name'], reference['key']] if reference
+  end
+  database_admin_name = environment == 'test' ? 'plepic-test-database-admin' : 'plepic-database-admin'
+  predeploy_database_admin_keys = predeploy_references.filter_map do |name, key|
+    key if name == database_admin_name
+  end.sort
+  raise 'predeploy database-admin privilege boundary mismatch' unless
+    predeploy_database_admin_keys == %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD]
+
+  runtime_superuser_consumers = documents.filter_map do |document|
+    next unless (pod = pod_spec(document))
+    references_superuser = pod.fetch('containers', []).any? do |container|
+      container.fetch('env', []).any? do |entry|
+        entry.dig('valueFrom', 'secretKeyRef', 'key') == 'POSTGRES_SUPERUSER_PASSWORD'
+      end
+    end
+    document.dig('metadata', 'name') if references_superuser
+  end
+  raise 'only PostgreSQL may consume the superuser password' unless
+    runtime_superuser_consumers == ["plepic-postgresql#{suffix}"]
+
   asset_mount_owners = documents.filter_map do |document|
     next unless (pod = pod_spec(document))
     asset_volume_names = pod.fetch('volumes', []).filter_map do |volume|

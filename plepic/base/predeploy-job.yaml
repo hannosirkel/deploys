@@ -39,8 +39,6 @@ spec:
             - {name: DATABASE_USER, value: medusa}
             - name: DATABASE_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
-            - name: POSTGRES_SUPERUSER_PASSWORD
-              valueFrom: {secretKeyRef: {name: plepic-database-admin, key: POSTGRES_SUPERUSER_PASSWORD}}
             - name: MEDUSA_ADMIN_EMAIL
               valueFrom: {secretKeyRef: {name: plepic-database-admin, key: MEDUSA_ADMIN_EMAIL}}
             - name: MEDUSA_ADMIN_PASSWORD
