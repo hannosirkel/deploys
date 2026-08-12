@@ -368,12 +368,12 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   }
   endpoint_workloads.each do |name, endpoint_types|
     kind = name.include?('predeploy') || name.include?('catalogue-import') ? 'Job' : 'Deployment'
-    environment = pod_spec(resource(documents, kind, name)).dig('containers', 0, 'env').to_h do |entry|
+    workload_environment = pod_spec(resource(documents, kind, name)).dig('containers', 0, 'env').to_h do |entry|
       [entry['name'], entry['value']]
     end
     endpoint_types.each do |endpoint_type|
-      host = environment.fetch("#{endpoint_type}_HOST")
-      port = environment.fetch("#{endpoint_type}_PORT")
+      host = workload_environment.fetch("#{endpoint_type}_HOST")
+      port = workload_environment.fetch("#{endpoint_type}_PORT")
       raise "#{name} has dangling #{endpoint_type} Service endpoint" unless service_ports[host] == port
     end
   end
@@ -405,6 +405,14 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   predeploy_database_admin_keys = predeploy_references.filter_map do |name, key|
     key if name == database_admin_name
   end.sort
+  expected_database_admin_references = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD].map do |key|
+    [database_admin_name, key]
+  end
+  actual_database_admin_references = predeploy_references.select do |name, _key|
+    name.end_with?('database-admin')
+  end.sort
+  raise 'environment-specific database-admin references mismatch' unless
+    actual_database_admin_references == expected_database_admin_references
   raise 'predeploy database-admin privilege boundary mismatch' unless
     predeploy_database_admin_keys == %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD]
 
