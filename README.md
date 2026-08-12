@@ -6,8 +6,15 @@ overlays, tests, and application-specific documentation. Add future
 applications as sibling roots without making the repository root a deployable
 Kustomization.
 
-`servitium/` is the first application root. It contains the shared Servitium
-workload definition in `servitium/base/` and two deployable overlays:
+The repository currently has two sibling application roots:
+
+- `servitium/` contains the shared Servitium workload definition and its live
+  and test overlays.
+- `plepic/` contains the shared Plepic site-and-shop stack and isolated live
+  and test overlays. See [`plepic/README.md`](plepic/README.md) for its
+  ownership, exposure, secret-bootstrap, promotion, and recovery contracts.
+
+Servitium's two deployable overlays are:
 
 - `servitium/overlays/live` deploys the production `servitium` workload. Its
   state is merge-promoted.
@@ -36,5 +43,13 @@ kubectl kustomize servitium/overlays/live >/dev/null
 kubectl kustomize servitium/overlays/test >/dev/null
 ```
 
-The `Validate` workflow runs the same checks for pull requests and pushes to
-`main`.
+Validate Plepic locally with:
+
+```bash
+bash plepic/tests/manifests.sh
+kubectl kustomize plepic/overlays/live >/dev/null
+kubectl kustomize plepic/overlays/test >/dev/null
+```
+
+The `Validate` workflow runs both application roots' checks for pull requests
+and pushes to `main`. The repository root remains non-deployable.

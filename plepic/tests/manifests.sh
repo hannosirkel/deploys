@@ -1,0 +1,407 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+temporary="$(mktemp -d)"
+trap 'rm -rf -- "$temporary"' EXIT
+
+cd "$repo_root"
+
+for environment in live test; do
+  overlay="plepic/overlays/$environment"
+  test -f "$overlay/kustomization.yaml" || {
+    echo "missing Plepic $environment overlay" >&2
+    exit 1
+  }
+  kubectl kustomize "$overlay" >"$temporary/$environment.yaml"
+done
+
+ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" <<'RUBY'
+SENTINEL = "sha256:#{'0' * 64}"
+
+def resource(documents, kind, name)
+  matches = documents.select do |document|
+    document['kind'] == kind && document.dig('metadata', 'name') == name
+  end
+  raise "expected one #{kind}/#{name}, got #{matches.length}" unless matches.length == 1
+  matches.first
+end
+
+def pod_spec(document)
+  case document['kind']
+  when 'Deployment', 'StatefulSet'
+    document.dig('spec', 'template', 'spec')
+  when 'Job'
+    document.dig('spec', 'template', 'spec')
+  end
+end
+
+def env_value(container, name)
+  entry = container.fetch('env', []).find { |item| item['name'] == name }
+  raise "missing #{name} on #{container['name']}" unless entry
+  entry['value']
+end
+
+def assert_pod_hardening(document)
+  pod = pod_spec(document)
+  raise "missing pod spec on #{document.dig('metadata', 'name')}" unless pod
+  raise 'service account token must be disabled' unless pod['automountServiceAccountToken'] == false
+  raise 'host namespaces are forbidden' if pod['hostNetwork'] || pod['hostPID'] || pod['hostIPC']
+  raise 'pod must run non-root' unless pod.dig('securityContext', 'runAsNonRoot') == true
+  raise 'RuntimeDefault seccomp is required' unless pod.dig('securityContext', 'seccompProfile', 'type') == 'RuntimeDefault'
+  pod.fetch('containers').each do |container|
+    security = container.fetch('securityContext')
+    raise 'privilege escalation is forbidden' unless security['allowPrivilegeEscalation'] == false
+    raise 'all capabilities must be dropped' unless security.dig('capabilities', 'drop') == ['ALL']
+    raise 'root filesystem must be read-only' unless security['readOnlyRootFilesystem'] == true
+    raise 'host ports are forbidden' if container.fetch('ports', []).any? { |port| port.key?('hostPort') }
+    raise "resources missing on #{container['name']}" unless container['resources']&.key?('requests') && container['resources']&.key?('limits')
+  end
+end
+
+def assert_network_contract(documents, suffix)
+  expected_policy_names = %w[
+    default-deny
+    allow-storefront-ingress
+    allow-backend-ingress
+    allow-postgresql-ingress
+    allow-redis-ingress
+    allow-dns-egress
+    allow-postgresql-egress
+    allow-redis-egress
+    allow-storefront-backend-egress
+    allow-smtp-submission-egress
+    allow-https-egress
+  ].map { |name| "#{name}#{suffix}" }.sort
+  actual_policy_names = documents.select { |document| document['kind'] == 'NetworkPolicy' }
+    .map { |document| document.dig('metadata', 'name') }.sort
+  raise 'NetworkPolicy set mismatch' unless actual_policy_names == expected_policy_names
+
+  deny = resource(documents, 'NetworkPolicy', "default-deny#{suffix}")
+  raise 'default deny selector mismatch' unless deny.dig('spec', 'podSelector') == {}
+  raise 'default deny policy types mismatch' unless deny.dig('spec', 'policyTypes').sort == %w[Egress Ingress]
+
+  storefront_ingress = resource(documents, 'NetworkPolicy', "allow-storefront-ingress#{suffix}")
+  raise 'storefront ingress selector mismatch' unless storefront_ingress.dig('spec', 'podSelector', 'matchLabels') == {
+    'app.kubernetes.io/component' => 'storefront',
+  }
+  raise 'storefront ingress contract mismatch' unless storefront_ingress.dig('spec', 'ingress') == [{
+    'from' => [{ 'ipBlock' => { 'cidr' => '192.168.0.0/16' } }],
+    'ports' => [{ 'port' => 3000, 'protocol' => 'TCP' }],
+  }]
+
+  backend_ingress = resource(documents, 'NetworkPolicy', "allow-backend-ingress#{suffix}")
+  raise 'backend ingress selector mismatch' unless backend_ingress.dig('spec', 'podSelector', 'matchLabels') == {
+    'app.kubernetes.io/component' => 'backend',
+  }
+  raise 'backend ingress contract mismatch' unless backend_ingress.dig('spec', 'ingress') == [
+    {
+      'from' => [{ 'ipBlock' => { 'cidr' => '192.168.0.0/16' } }],
+      'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
+    },
+    {
+      'from' => [{ 'podSelector' => { 'matchLabels' => {
+        'app.kubernetes.io/component' => 'storefront',
+      } } }],
+      'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
+    },
+  ]
+
+  postgresql = resource(documents, 'NetworkPolicy', "allow-postgresql-ingress#{suffix}")
+  raise 'PostgreSQL ingress selector mismatch' unless postgresql.dig('spec', 'podSelector', 'matchLabels') == {
+    'app.kubernetes.io/component' => 'postgresql',
+  }
+  postgresql_peers = postgresql.dig('spec', 'ingress', 0, 'from').map do |peer|
+    peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/component')
+  end.sort
+  raise 'PostgreSQL peer set mismatch' unless postgresql_peers == %w[backend backup catalogue-import predeploy recovery worker]
+
+  redis = resource(documents, 'NetworkPolicy', "allow-redis-ingress#{suffix}")
+  raise 'Redis ingress selector mismatch' unless redis.dig('spec', 'podSelector', 'matchLabels') == {
+    'app.kubernetes.io/component' => 'redis',
+  }
+  redis_peers = redis.dig('spec', 'ingress', 0, 'from').map do |peer|
+    peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/component')
+  end.sort
+  raise 'Redis peer set mismatch' unless redis_peers == %w[backend worker]
+
+  dns = resource(documents, 'NetworkPolicy', "allow-dns-egress#{suffix}")
+  raise 'DNS egress must select all pods' unless dns.dig('spec', 'podSelector') == {}
+  raise 'DNS egress mismatch' unless dns.dig('spec', 'egress') == [{
+    'to' => [{
+      'namespaceSelector' => { 'matchLabels' => { 'kubernetes.io/metadata.name' => 'kube-system' } },
+      'podSelector' => { 'matchLabels' => { 'k8s-app' => 'kube-dns' } },
+    }],
+    'ports' => [{ 'port' => 53, 'protocol' => 'UDP' }, { 'port' => 53, 'protocol' => 'TCP' }],
+  }]
+
+  postgresql_egress = resource(documents, 'NetworkPolicy', "allow-postgresql-egress#{suffix}")
+  raise 'PostgreSQL egress peer mismatch' unless postgresql_egress.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
+    %w[backend backup catalogue-import predeploy recovery worker]
+  raise 'PostgreSQL egress port mismatch' unless postgresql_egress.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 5432, 'protocol' => 'TCP' }]
+  raise 'PostgreSQL egress destination mismatch' unless postgresql_egress.dig('spec', 'egress', 0, 'to') == [{
+    'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'postgresql' } },
+  }]
+
+  redis_egress = resource(documents, 'NetworkPolicy', "allow-redis-egress#{suffix}")
+  raise 'Redis egress peer mismatch' unless redis_egress.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backend worker]
+  raise 'Redis egress port mismatch' unless redis_egress.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 6379, 'protocol' => 'TCP' }]
+  raise 'Redis egress destination mismatch' unless redis_egress.dig('spec', 'egress', 0, 'to') == [{
+    'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'redis' } },
+  }]
+
+  storefront_egress = resource(documents, 'NetworkPolicy', "allow-storefront-backend-egress#{suffix}")
+  raise 'storefront egress selector mismatch' unless storefront_egress.dig('spec', 'podSelector', 'matchLabels') == {
+    'app.kubernetes.io/component' => 'storefront',
+  }
+  raise 'storefront-to-backend egress mismatch' unless storefront_egress.dig('spec', 'egress') == [{
+    'to' => [{ 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'backend' } } }],
+    'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
+  }]
+
+  smtp = resource(documents, 'NetworkPolicy', "allow-smtp-submission-egress#{suffix}")
+  raise 'SMTP workload peer set mismatch' unless smtp.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backend worker]
+  smtp_cidr = smtp.dig('spec', 'egress', 0, 'to', 0, 'ipBlock', 'cidr')
+  raise 'SMTP patch seam must be a private /32' unless smtp_cidr&.match?(%r{\A(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d+\.\d+/32\z})
+  raise 'SMTP submission port mismatch' unless smtp.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 587, 'protocol' => 'TCP' }]
+
+  https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
+  raise 'HTTPS workload peer set mismatch' unless https.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
+    %w[backend catalogue-import predeploy storefront worker]
+  raise 'HTTPS broad egress mismatch' unless https.dig('spec', 'egress') == [{
+    'to' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0' } }],
+    'ports' => [{ 'port' => 443, 'protocol' => 'TCP' }],
+  }]
+
+  all_policies = documents.select { |document| document['kind'] == 'NetworkPolicy' }
+  broad_rules = all_policies.select { |policy| policy.to_s.include?('0.0.0.0/0') }
+  raise 'only named HTTPS egress may be broad' unless broad_rules.map { |policy| policy.dig('metadata', 'name') } == ["allow-https-egress#{suffix}"]
+  allowed_ports = all_policies.flat_map do |policy|
+    policy.fetch('spec').fetch('egress', []).flat_map { |rule| rule.fetch('ports', []).map { |port| port['port'] } }
+  end
+  raise 'TCP 25 must not be allowed' if allowed_ports.include?(25)
+end
+
+def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, secrets:, pvc_sizes:, resources:)
+  documents = YAML.load_stream(File.read(path)).compact
+  overlay = YAML.load_file("plepic/overlays/#{environment}/kustomization.yaml")
+  raise 'overlay may source only the shared base' unless overlay['resources'] == ['../../base']
+  expected_name_suffix = environment == 'test' ? '-test' : nil
+  raise 'overlay name suffix mismatch' unless overlay['nameSuffix'] == expected_name_suffix
+  raise 'overlay namespace mismatch' unless overlay['namespace'] == namespace
+  expected_images = %w[ghcr.io/hannosirkel/plepic-backend ghcr.io/hannosirkel/plepic-storefront]
+  raise 'overlay image names mismatch' unless overlay.fetch('images').map { |image| image['name'] }.sort == expected_images.sort
+  raise 'overlay must retain both Task 4 sentinels' unless overlay.fetch('images').all? { |image| image['digest'] == SENTINEL }
+  raise 'Namespace resources are owned by Orange' if documents.any? { |document| document['kind'] == 'Namespace' }
+  raise 'Ingress is forbidden' if documents.any? { |document| document['kind'] == 'Ingress' }
+  raise 'Role and RoleBinding are forbidden' if documents.any? { |document| %w[Role RoleBinding ClusterRole ClusterRoleBinding].include?(document['kind']) }
+  raise 'resource namespace mismatch' unless documents.all? { |document| document.dig('metadata', 'namespace') == namespace }
+
+  %w[Deployment StatefulSet Job].each do |kind|
+    documents.select { |document| document['kind'] == kind }.each { |document| assert_pod_hardening(document) }
+  end
+
+  service_account = resource(documents, 'ServiceAccount', "plepic-predeploy#{suffix}")
+  raise 'predeploy service account must not mount a token' unless service_account['automountServiceAccountToken'] == false
+
+  predeploy = resource(documents, 'Job', "plepic-predeploy#{suffix}")
+  expected_hook = {
+    'argocd.argoproj.io/hook' => 'Sync',
+    'argocd.argoproj.io/hook-delete-policy' => 'BeforeHookCreation,HookSucceeded',
+    'argocd.argoproj.io/sync-wave' => '-10',
+  }
+  raise 'migration Sync-hook gate mismatch' unless predeploy.dig('metadata', 'annotations') == expected_hook
+  raise 'predeploy token exception must not return' unless pod_spec(predeploy)['automountServiceAccountToken'] == false
+
+  import = resource(documents, 'Job', "plepic-catalogue-import#{suffix}")
+  raise 'catalogue import must stay suspended' unless import.dig('spec', 'suspend') == true
+  raise 'catalogue import annotations mismatch' unless import.dig('metadata', 'annotations') == {
+    'argocd.argoproj.io/sync-wave' => '0',
+    'argocd.argoproj.io/ignore-healthcheck' => 'true',
+    'argocd.argoproj.io/sync-options' => 'Force=true,Replace=true',
+  }
+
+  wave_minus_twenty = documents.select do |document|
+    document.dig('metadata', 'annotations', 'argocd.argoproj.io/sync-wave') == '-20'
+  end
+  raise 'data/support resources must be wave -20' unless wave_minus_twenty.any? { |document| document['kind'] == 'StatefulSet' }
+  documents.each do |document|
+    name = document.dig('metadata', 'name')
+    expected_wave = if document.equal?(predeploy)
+      '-10'
+    elsif document.equal?(import) || document['kind'] == 'Deployment' ||
+          (document['kind'] == 'Service' && ["plepic-backend#{suffix}", "plepic-storefront#{suffix}"].include?(name))
+      '0'
+    else
+      '-20'
+    end
+    raise "#{document['kind']}/#{name} Sync wave mismatch" unless
+      document.dig('metadata', 'annotations', 'argocd.argoproj.io/sync-wave') == expected_wave
+    if document != predeploy && document.dig('metadata', 'annotations')&.key?('argocd.argoproj.io/hook')
+      raise "only the migration Job may be an Argo hook"
+    end
+  end
+
+  externally_reachable = %w[storefront backend].to_h do |component|
+    service = resource(documents, 'Service', "plepic-#{component}#{suffix}")
+    raise 'externally reachable service must remain ClusterIP' unless service.dig('spec', 'type') == 'ClusterIP'
+    raise 'WireGuard externalIP mismatch' unless service.dig('spec', 'externalIPs') == ['192.168.21.2']
+    raise 'NodePort is forbidden' if service.dig('spec', 'ports').any? { |port| port.key?('nodePort') }
+    [component, service.dig('spec', 'ports', 0, 'port')]
+  end
+  raise 'external service port mismatch' unless externally_reachable == ports
+  %w[postgresql redis].each do |component|
+    service = resource(documents, 'Service', "plepic-#{component}#{suffix}")
+    raise 'data service must remain ClusterIP' unless service.dig('spec', 'type') == 'ClusterIP'
+    raise 'data service externalIP is forbidden' if service.fetch('spec').key?('externalIPs')
+  end
+  raise 'LoadBalancer service is forbidden' if documents.any? { |document| document['kind'] == 'Service' && document.dig('spec', 'type') == 'LoadBalancer' }
+
+  postgresql = resource(documents, 'StatefulSet', "plepic-postgresql#{suffix}")
+  redis = resource(documents, 'StatefulSet', "plepic-redis#{suffix}")
+  postgresql_init = resource(documents, 'ConfigMap', "plepic-postgresql-init#{suffix}")
+    .dig('data', '10-medusa-owner.sh')
+  raise 'application role must own the database' unless postgresql_init.include?('CREATE DATABASE %I OWNER %I')
+  raise 'application-role default privileges are required' unless postgresql_init.include?('ALTER DEFAULT PRIVILEGES FOR ROLE %I')
+  redis_config = resource(documents, 'ConfigMap', "plepic-redis-config#{suffix}").dig('data', 'redis.conf')
+  raise 'Redis AOF contract mismatch' unless redis_config.include?("appendonly yes\n") && redis_config.include?("appendfsync everysec\n")
+  raise 'Redis ACL file is required' unless redis_config.include?('aclfile /run/redis/users.acl')
+  redis_args = pod_spec(redis).dig('containers', 0, 'args').join("\n")
+  raise 'Redis dangerous commands must be denied by ACL' unless redis_args.include?('-@dangerous')
+  raise 'deprecated Redis rename-command is forbidden' if redis_config.include?('rename-command') || redis_args.include?('rename-command')
+  postgresql_image = pod_spec(postgresql).dig('containers', 0, 'image')
+  redis_image = pod_spec(redis).dig('containers', 0, 'image')
+  raise 'PostgreSQL must be digest pinned' unless postgresql_image&.match?(%r{\Apostgres:[^@]+@sha256:[0-9a-f]{64}\z})
+  raise 'Redis must be digest pinned' unless redis_image&.match?(%r{\Aredis:[^@]+@sha256:[0-9a-f]{64}\z})
+
+  application_images = documents.flat_map do |document|
+    pod_spec(document)&.fetch('containers', [])&.map { |container| container['image'] } || []
+  end.select { |image| image&.start_with?('ghcr.io/hannosirkel/plepic-') }
+  raise 'Task 4 backend image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-backend@#{SENTINEL}") == 4
+  raise 'Task 4 storefront image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-storefront@#{SENTINEL}") == 1
+
+  pvc_sizes.each do |name, size|
+    pvc = resource(documents, 'PersistentVolumeClaim', "plepic-#{name}#{suffix}")
+    raise "#{name} PVC size mismatch" unless pvc.dig('spec', 'resources', 'requests', 'storage') == size
+  end
+
+  resources.each do |component, expected|
+    kind = %w[postgresql redis].include?(component) ? 'StatefulSet' : (component == 'predeploy' || component == 'catalogue-import' ? 'Job' : 'Deployment')
+    workload = resource(documents, kind, "plepic-#{component}#{suffix}")
+    actual = pod_spec(workload).dig('containers', 0, 'resources')
+    raise "#{component} resource contract mismatch" unless actual == expected
+  end
+
+  database_workloads = %w[backend worker predeploy catalogue-import].map do |component|
+    kind = %w[predeploy catalogue-import].include?(component) ? 'Job' : 'Deployment'
+    resource(documents, kind, "plepic-#{component}#{suffix}")
+  end
+  database_workloads.each do |workload|
+    container = pod_spec(workload).dig('containers', 0)
+    raise 'database name mismatch' unless env_value(container, 'DATABASE_NAME') == database
+    raise 'migrations and workloads must use the application role' unless env_value(container, 'DATABASE_USER') == 'medusa'
+  end
+  pg_container = pod_spec(postgresql).dig('containers', 0)
+  raise 'PostgreSQL application database mismatch' unless env_value(pg_container, 'POSTGRES_APPLICATION_DATABASE') == database
+
+  secret_references = Hash.new { |hash, key| hash[key] = [] }
+  documents.each do |document|
+    next unless (pod = pod_spec(document))
+    pod.fetch('containers', []).each do |container|
+      container.fetch('env', []).each do |entry|
+        reference = entry.dig('valueFrom', 'secretKeyRef')
+        secret_references[reference['name']] << reference['key'] if reference
+      end
+    end
+  end
+  normalized_references = secret_references.transform_values { |keys| keys.uniq.sort }
+  raise 'ESO Secret names or keys mismatch' unless normalized_references == secrets.transform_values(&:sort)
+  raise 'deploys must not render Secrets' if documents.any? { |document| document['kind'] == 'Secret' }
+
+  asset_mount_owners = documents.filter_map do |document|
+    next unless (pod = pod_spec(document))
+    asset_volume_names = pod.fetch('volumes', []).filter_map do |volume|
+      volume['name'] if volume.dig('persistentVolumeClaim', 'claimName') == "plepic-assets#{suffix}"
+    end
+    mounts = pod.fetch('containers', []).flat_map { |container| container.fetch('volumeMounts', []) }
+    document.dig('metadata', 'name') if mounts.any? { |mount| asset_volume_names.include?(mount['name']) }
+  end.sort
+  raise 'assets PVC writer set mismatch' unless asset_mount_owners == %W[
+    plepic-backend#{suffix}
+    plepic-catalogue-import#{suffix}
+    plepic-worker#{suffix}
+  ].sort
+
+  assert_network_contract(documents, suffix)
+  rendered = File.read(path)
+  raise 'IPv6 exposure is forbidden' if rendered.include?('::')
+  raise 'public account addresses are forbidden' if rendered.match?(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
+  rendered.scan(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/).each do |literal|
+    next if ['0.0.0.0', '0.0.0.0/0'].include?(literal)
+    raise "public IPv4 is forbidden: #{literal}" unless IPAddr.new(literal).private?
+  end
+
+  {
+    names: documents.map { |document| [document['kind'], document.dig('metadata', 'name')] }.to_set,
+    pvcs: documents.select { |document| document['kind'] == 'PersistentVolumeClaim' }.map { |document| document.dig('metadata', 'name') }.to_set,
+    secrets: secret_references.keys.to_set,
+    services: documents.select { |document| document['kind'] == 'Service' }.map { |document| document.dig('metadata', 'name') }.to_set,
+    ports: externally_reachable.values.to_set,
+    databases: Set[database],
+  }
+end
+
+require 'ipaddr'
+require 'set'
+
+live_resources = {
+  'postgresql' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'redis' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'backend' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'worker' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'storefront' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'predeploy' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'catalogue-import' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+}
+test_resources = {
+  'postgresql' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'redis' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'backend' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'worker' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'storefront' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'catalogue-import' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+}
+runtime_keys = %w[COOKIE_SECRET DATABASE_PASSWORD JWT_SECRET NEWSLETTER_API_KEY NEWSLETTER_LIST_ID REDIS_PASSWORD SMTP_PASSWORD SMTP_USERNAME STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET TURNSTILE_SECRET_KEY TURNSTILE_SITE_KEY]
+admin_keys = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD POSTGRES_SUPERUSER_PASSWORD]
+
+live = assert_manifest(
+  ARGV.fetch(0), environment: 'live', namespace: 'plepic', suffix: '',
+  ports: { 'storefront' => 8101, 'backend' => 8102 }, database: 'plepic',
+  secrets: {
+    'plepic-runtime-credentials' => runtime_keys,
+    'plepic-database-admin' => admin_keys,
+    'plepic-publishable-key' => ['publishableKey'],
+  },
+  pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
+  resources: live_resources,
+)
+test = assert_manifest(
+  ARGV.fetch(1), environment: 'test', namespace: 'plepic-test', suffix: '-test',
+  ports: { 'storefront' => 8111, 'backend' => 8112 }, database: 'plepic_test',
+  secrets: {
+    'plepic-test-runtime-credentials' => runtime_keys,
+    'plepic-test-database-admin' => admin_keys,
+    'plepic-test-publishable-key' => ['publishableKey'],
+  },
+  pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
+  resources: test_resources,
+)
+
+%i[names pvcs secrets services ports databases].each do |boundary|
+  overlap = live.fetch(boundary) & test.fetch(boundary)
+  raise "live and test share #{boundary}: #{overlap.to_a.inspect}" unless overlap.empty?
+end
+
+puts 'Plepic manifest contract tests passed'
+RUBY
