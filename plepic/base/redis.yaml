@@ -1,0 +1,115 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: plepic-redis-config
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    protected-mode yes
+    port 6379
+    dir /data
+    appendonly yes
+    appendfsync everysec
+    aclfile /run/redis/users.acl
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: plepic-redis
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: plepic-redis
+  labels: &redis-labels
+    app.kubernetes.io/name: plepic-redis
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/part-of: plepic
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+spec:
+  replicas: 1
+  serviceName: plepic-redis
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plepic-redis
+  template:
+    metadata:
+      labels: *redis-labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7.4.6-bookworm@sha256:a9cc41d6d01da2aa26c219e4f99ecbeead955a7b656c1c499cce8922311b2514
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              printf 'user default on >%s ~* &* +@all -@dangerous\n' "$REDIS_PASSWORD" > /run/redis/users.acl
+              exec redis-server /etc/redis/redis.conf
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: plepic-runtime-credentials
+                  key: REDIS_PASSWORD
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          readinessProbe: &redis-probe
+            exec:
+              command: [/bin/sh, -ec, 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            <<: *redis-probe
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/redis/redis.conf
+              subPath: redis.conf
+              readOnly: true
+            - name: run
+              mountPath: /run/redis
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: plepic-redis
+        - name: config
+          configMap:
+            name: plepic-redis-config
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

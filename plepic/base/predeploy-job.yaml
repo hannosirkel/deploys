@@ -1,0 +1,56 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: plepic-predeploy
+  labels: &labels
+    app.kubernetes.io/name: plepic-predeploy
+    app.kubernetes.io/component: predeploy
+    app.kubernetes.io/part-of: plepic
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      serviceAccountName: plepic-predeploy
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: predeploy
+          image: ghcr.io/hannosirkel/plepic-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          args: [npm, run, predeploy]
+          env:
+            - {name: DATABASE_HOST, value: plepic-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: plepic}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            - name: POSTGRES_SUPERUSER_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-database-admin, key: POSTGRES_SUPERUSER_PASSWORD}}
+            - name: MEDUSA_ADMIN_EMAIL
+              valueFrom: {secretKeyRef: {name: plepic-database-admin, key: MEDUSA_ADMIN_EMAIL}}
+            - name: MEDUSA_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-database-admin, key: MEDUSA_ADMIN_PASSWORD}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

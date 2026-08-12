@@ -1,0 +1,53 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: plepic-catalogue-import
+  labels: &labels
+    app.kubernetes.io/name: plepic-catalogue-import
+    app.kubernetes.io/component: catalogue-import
+    app.kubernetes.io/part-of: plepic
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: catalogue-import
+          image: ghcr.io/hannosirkel/plepic-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          args: [npm, run, "catalogue:import"]
+          env:
+            - {name: DATABASE_HOST, value: plepic-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: plepic}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: assets, mountPath: /app/static}
+            - {name: assets, mountPath: /var/lib/plepic/import, subPath: import}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: assets
+          persistentVolumeClaim: {claimName: plepic-assets}
+        - name: tmp
+          emptyDir: {}

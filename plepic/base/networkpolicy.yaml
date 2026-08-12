@@ -1,0 +1,172 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-storefront-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: storefront}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 192.168.0.0/16}
+      ports:
+        - {port: 3000, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: backend}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 192.168.0.0/16}
+      ports:
+        - {port: 9000, protocol: TCP}
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: storefront}
+      ports:
+        - {port: 9000, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: postgresql}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backend}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: predeploy}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: catalogue-import}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backup}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: recovery}}
+      ports:
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backend}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+      ports:
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, predeploy, catalogue-import, backup, recovery]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: postgresql}
+      ports:
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: redis}
+      ports:
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-smtp-submission-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 587, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-https-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, storefront, predeploy, catalogue-import]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 443, protocol: TCP}
