@@ -28,6 +28,12 @@ private per-environment configuration before deployment. Storefront and every
 backend-image workload deliberately receive the same four `MERCHANT_*` values,
 because the storefront legal pages and durable order-confirmation email resolve
 the same approved withdrawal notice.
+Newsletter API credentials are an existing runtime Secret projection but are
+mounted only by the backend API pod; workers and lifecycle Jobs cannot subscribe
+addresses. That pod also enforces a deployment-wide limit of 20 valid signup
+attempts per 600 seconds with one atomic counter in its environment's existing
+authenticated Redis. The key is global: no address, IP, Turnstile token, or
+other subscriber-derived value is stored in Redis.
 
 Both overlays intentionally begin with the all-zero SHA-256 sentinel for the
 backend and storefront images. The sentinel is not deployable. After this

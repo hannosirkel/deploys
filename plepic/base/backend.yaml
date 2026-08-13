@@ -46,6 +46,8 @@ spec:
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
             - {name: REDIS_HOST, value: plepic-redis}
             - {name: REDIS_PORT, value: "6379"}
+            - {name: NEWSLETTER_RATE_LIMIT_MAX, value: "20"}
+            - {name: NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS, value: "600"}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: REDIS_PASSWORD}}
             - name: COOKIE_SECRET

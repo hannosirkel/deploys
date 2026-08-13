@@ -396,6 +396,30 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     end
     raise 'backend-family merchant legal contract mismatch' unless actual_merchant_environment == merchant_environment
   end
+  newsletter_keys = %w[NEWSLETTER_API_KEY NEWSLETTER_LIST_ID]
+  newsletter_consumers = database_workloads.filter_map do |workload|
+    container = pod_spec(workload).dig('containers', 0)
+    keys = container.fetch('env', []).filter_map do |entry|
+      entry['name'] if newsletter_keys.include?(entry['name'])
+    end.sort
+    [workload.dig('metadata', 'name'), keys] unless keys.empty?
+  end.to_h
+  raise 'newsletter credentials must be projected only to the backend' unless newsletter_consumers == {
+    "plepic-backend#{suffix}" => newsletter_keys.sort,
+  }
+  newsletter_limit_environment = database_workloads.filter_map do |workload|
+    container = pod_spec(workload).dig('containers', 0)
+    values = %w[NEWSLETTER_RATE_LIMIT_MAX NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS].to_h do |name|
+      [name, env_value(container, name)]
+    end
+    [workload.dig('metadata', 'name'), values] if values.values.any?
+  end.to_h
+  raise 'newsletter rate limit must be a backend-only explicit deployment contract' unless newsletter_limit_environment == {
+    "plepic-backend#{suffix}" => {
+      'NEWSLETTER_RATE_LIMIT_MAX' => '20',
+      'NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS' => '600',
+    },
+  }
   pg_container = pod_spec(postgresql).dig('containers', 0)
   raise 'PostgreSQL application database mismatch' unless env_value(pg_container, 'POSTGRES_APPLICATION_DATABASE') == database
 
