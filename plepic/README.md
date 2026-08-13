@@ -21,6 +21,14 @@ Orange WireGuard address as an `externalIP`; there is no Ingress, NodePort, or
 LoadBalancer. Orange supplies the real per-environment ingress and SMTP source
 patches without placing live addresses in this public repository.
 
+The base also carries reserved non-secret mail and merchant placeholders. The
+SMTP host, envelope sender, contact recipient, merchant legal name, registered
+address, legal contact address, and return address must all be replaced by the
+private per-environment configuration before deployment. Storefront and every
+backend-image workload deliberately receive the same four `MERCHANT_*` values,
+because the storefront legal pages and durable order-confirmation email resolve
+the same approved withdrawal notice.
+
 Both overlays intentionally begin with the all-zero SHA-256 sentinel for the
 backend and storefront images. The sentinel is not deployable. After this
 bootstrap commit, image digest lines are promotion state owned only by the

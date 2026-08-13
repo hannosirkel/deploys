@@ -114,6 +114,12 @@ patches:
                   - {name: DATABASE_NAME, value: plepic_test}
                   - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
+                  - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
+                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
+                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
+                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
+                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD
@@ -156,6 +162,12 @@ patches:
                   - {name: DATABASE_NAME, value: plepic_test}
                   - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
+                  - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
+                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
+                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
+                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
+                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD
@@ -168,6 +180,8 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
                   - name: SMTP_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_PASSWORD}}
+                  - name: TURNSTILE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: TURNSTILE_SECRET_KEY}}
                   - name: STRIPE_SECRET_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
                   - name: STRIPE_WEBHOOK_SECRET
@@ -189,6 +203,10 @@ patches:
               - name: storefront
                 env:
                   - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend-test:8112"}
+                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
+                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
+                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
+                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: MEDUSA_PUBLISHABLE_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY
@@ -223,6 +241,19 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
                   - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID}}
+                  - {name: SMTP_HOST, value: smtp-test.invalid}
+                  - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
+                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
+                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
+                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
+                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
+                  - name: SMTP_USERNAME
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
+                  - name: SMTP_PASSWORD
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_PASSWORD}}
+                  - name: TURNSTILE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: TURNSTILE_SECRET_KEY}}
   - target:
       kind: Job
       name: plepic-catalogue-import
@@ -247,3 +278,16 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
                   - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID}}
+                  - {name: SMTP_HOST, value: smtp-test.invalid}
+                  - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
+                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
+                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
+                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
+                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
+                  - name: SMTP_USERNAME
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
+                  - name: SMTP_PASSWORD
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_PASSWORD}}
+                  - name: TURNSTILE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: TURNSTILE_SECRET_KEY}}

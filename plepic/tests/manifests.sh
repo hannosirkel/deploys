@@ -349,6 +349,21 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     kind = %w[predeploy catalogue-import].include?(component) ? 'Job' : 'Deployment'
     resource(documents, kind, "plepic-#{component}#{suffix}")
   end
+  merchant_environment = if environment == 'test'
+    {
+      'MERCHANT_LEGAL_NAME' => 'Example Test Games OÜ',
+      'MERCHANT_REGISTERED_ADDRESS' => 'Test Street 1, Tallinn',
+      'MERCHANT_CONTACT_ADDRESS' => 'legal-test@example.com',
+      'MERCHANT_RETURN_ADDRESS' => 'Test Return Street 2, Tallinn',
+    }
+  else
+    {
+      'MERCHANT_LEGAL_NAME' => 'Example Games OÜ',
+      'MERCHANT_REGISTERED_ADDRESS' => 'Example Street 1, Tallinn',
+      'MERCHANT_CONTACT_ADDRESS' => 'legal@example.com',
+      'MERCHANT_RETURN_ADDRESS' => 'Return Street 2, Tallinn',
+    }
+  end
   database_workloads.each do |workload|
     container = pod_spec(workload).dig('containers', 0)
     raise 'database name mismatch' unless env_value(container, 'DATABASE_NAME') == database
@@ -363,6 +378,23 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
       [key, runtime_secret, key]
     end
     raise 'backend-family Stripe runtime contract mismatch' unless stripe_refs.sort == expected_stripe_refs.sort
+    mail_refs = container.fetch('env', []).filter_map do |entry|
+      next unless %w[SMTP_PASSWORD SMTP_USERNAME TURNSTILE_SECRET_KEY].include?(entry['name'])
+      reference = entry.dig('valueFrom', 'secretKeyRef')
+      [entry['name'], reference&.fetch('name'), reference&.fetch('key')]
+    end
+    expected_mail_refs = %w[SMTP_PASSWORD SMTP_USERNAME TURNSTILE_SECRET_KEY].map do |key|
+      [key, runtime_secret, key]
+    end
+    raise 'backend-family mail secret contract mismatch' unless mail_refs.sort == expected_mail_refs.sort
+    raise 'backend-family SMTP port must be submission 587' unless env_value(container, 'SMTP_PORT') == '587'
+    raise 'backend-family SMTP host must remain deployment-supplied' unless env_value(container, 'SMTP_HOST')&.end_with?('.invalid')
+    raise 'backend-family envelope sender must be synthetic' unless env_value(container, 'SMTP_ENVELOPE_FROM')&.end_with?('@example.com')
+    raise 'backend-family contact recipient must be synthetic' unless env_value(container, 'CONTACT_MAIL_RECIPIENT')&.end_with?('@example.com')
+    actual_merchant_environment = merchant_environment.keys.to_h do |name|
+      [name, env_value(container, name)]
+    end
+    raise 'backend-family merchant legal contract mismatch' unless actual_merchant_environment == merchant_environment
   end
   pg_container = pod_spec(postgresql).dig('containers', 0)
   raise 'PostgreSQL application database mismatch' unless env_value(pg_container, 'POSTGRES_APPLICATION_DATABASE') == database
@@ -389,6 +421,8 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   end
   storefront_environment = pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}"))
     .dig('containers', 0, 'env').to_h { |entry| [entry['name'], entry['value']] }
+  raise 'storefront and backend merchant legal contracts differ' unless
+    storefront_environment.slice(*merchant_environment.keys) == merchant_environment
   backend_url = URI(storefront_environment.fetch('MEDUSA_BACKEND_URL'))
   raise 'storefront has dangling backend Service endpoint' unless
     backend_url.scheme == 'http' && service_ports[backend_url.host] == backend_url.port.to_s

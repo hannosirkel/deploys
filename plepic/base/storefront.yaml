@@ -34,6 +34,10 @@ spec:
           env:
             - {name: NODE_ENV, value: production}
             - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:9000"}
+            - {name: MERCHANT_LEGAL_NAME, value: "Example Games OÜ"}
+            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Example Street 1, Tallinn"}
+            - {name: MERCHANT_CONTACT_ADDRESS, value: legal@example.com}
+            - {name: MERCHANT_RETURN_ADDRESS, value: "Return Street 2, Tallinn"}
             - name: MEDUSA_PUBLISHABLE_KEY
               valueFrom: {secretKeyRef: {name: plepic-publishable-key, key: publishableKey}}
             - name: STRIPE_PUBLISHABLE_KEY
