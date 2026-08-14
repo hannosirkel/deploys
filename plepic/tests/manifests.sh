@@ -27,15 +27,24 @@ def resource(documents, kind, name)
   matches.first
 end
 
+# One declaration of what carries a pod, so nothing can enumerate a stale subset
+# of it. Every kind here is resolved, and membership is what tells a caller the
+# difference between "not a pod-carrying kind" and "a pod-carrying kind that
+# failed to resolve" — two answers a bare nil cannot distinguish.
+POD_TEMPLATE_PATHS = {
+  'Deployment' => %w[spec template spec],
+  'StatefulSet' => %w[spec template spec],
+  'Job' => %w[spec template spec],
+  'DaemonSet' => %w[spec template spec],
+  'ReplicaSet' => %w[spec template spec],
+  'ReplicationController' => %w[spec template spec],
+  'CronJob' => %w[spec jobTemplate spec template spec],
+  'Pod' => %w[spec],
+}.freeze
+
 def pod_spec(document)
-  case document['kind']
-  when 'Deployment', 'StatefulSet', 'Job', 'DaemonSet', 'ReplicaSet', 'ReplicationController'
-    document.dig('spec', 'template', 'spec')
-  when 'CronJob'
-    document.dig('spec', 'jobTemplate', 'spec', 'template', 'spec')
-  when 'Pod'
-    document['spec']
-  end
+  path = POD_TEMPLATE_PATHS[document['kind']]
+  path && document.dig(*path)
 end
 
 # Every assertion about pods reaches them through pod_spec, so a kind it does
@@ -92,9 +101,14 @@ end
 def workloads(documents)
   documents.each do |document|
     next if pod_spec(document)
+    name = document.dig('metadata', 'name')
+    # A recognised kind that fails to resolve must not be quietly filtered out.
+    # Selecting on truthiness alone skipped it and left the "missing pod spec"
+    # guard unreachable for exactly the case it was written for.
+    raise "#{document['kind']}/#{name} is a pod-carrying kind whose pod spec does not resolve" if
+      POD_TEMPLATE_PATHS.key?(document['kind'])
     next unless carries_pod_template?(document)
-    raise "#{document['kind']}/#{document.dig('metadata', 'name')} carries a pod " \
-          'template that pod_spec does not resolve'
+    raise "#{document['kind']}/#{name} carries a pod template that pod_spec does not resolve"
   end
   documents.select { |document| pod_spec(document) }
 end
