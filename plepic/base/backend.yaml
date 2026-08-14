@@ -91,7 +91,7 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
-            - {name: assets, mountPath: /app/static}
+            - {name: assets, mountPath: /app/static, subPath: media}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: assets

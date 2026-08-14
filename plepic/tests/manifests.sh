@@ -665,6 +665,35 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     plepic-worker#{suffix}
   ].sort
 
+  # The served media root and the import staging directory must be disjoint
+  # subtrees of the assets PVC. They were once the same subtree, which made a
+  # staged WooCommerce export — customer accounts, sessions and order history —
+  # publicly downloadable under /static the moment an import left one behind.
+  # Deleting the archive is the other half of that fix; this is the half that
+  # holds when a future exit path forgets to.
+  documents.each do |document|
+    next unless (pod = pod_spec(document))
+    name = document.dig('metadata', 'name')
+    assets_volumes = pod.fetch('volumes', []).filter_map do |volume|
+      volume['name'] if volume.dig('persistentVolumeClaim', 'claimName') == "plepic-assets#{suffix}"
+    end
+    next if assets_volumes.empty?
+    pod_containers(pod).flat_map { |container| container.fetch('volumeMounts', []) }
+      .select { |mount| assets_volumes.include?(mount['name']) }
+      .each do |mount|
+        case mount['mountPath']
+        when '/app/static'
+          raise "#{name} must serve media from the assets PVC's media subtree" unless
+            mount['subPath'] == 'media'
+        when '/var/lib/plepic/import'
+          raise "#{name} must stage imports in the assets PVC's import subtree" unless
+            mount['subPath'] == 'import'
+        else
+          raise "#{name} mounts the assets PVC at an undeclared path #{mount['mountPath']}"
+        end
+      end
+  end
+
   assert_network_contract(documents, suffix)
   rendered = File.read(path)
   raise 'IPv6 exposure is forbidden' if rendered.include?('::')

@@ -65,7 +65,7 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
-            - {name: assets, mountPath: /app/static}
+            - {name: assets, mountPath: /app/static, subPath: media}
             - {name: assets, mountPath: /var/lib/plepic/import, subPath: import}
             - {name: tmp, mountPath: /tmp}
       volumes:
