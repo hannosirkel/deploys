@@ -29,10 +29,30 @@ end
 
 def pod_spec(document)
   case document['kind']
-  when 'Deployment', 'StatefulSet'
+  when 'Deployment', 'StatefulSet', 'Job', 'DaemonSet', 'ReplicaSet', 'ReplicationController'
     document.dig('spec', 'template', 'spec')
-  when 'Job'
-    document.dig('spec', 'template', 'spec')
+  when 'CronJob'
+    document.dig('spec', 'jobTemplate', 'spec', 'template', 'spec')
+  when 'Pod'
+    document['spec']
+  end
+end
+
+# Every assertion about pods reaches them through pod_spec, so a kind it does
+# not recognise is not merely unchecked — it is invisible to pod hardening, to
+# the Secret-reference contract, to the superuser boundary and to the assets
+# writer set at once. Recognising more kinds is therefore not enough; an
+# unrecognised kind that carries a pod template must fail loudly, so this set
+# can never silently fall behind what the overlays render.
+def carries_pod_template?(value)
+  case value
+  when Hash
+    return true if value['containers'].is_a?(Array) || value['initContainers'].is_a?(Array)
+    value.each_value.any? { |nested| carries_pod_template?(nested) }
+  when Array
+    value.any? { |nested| carries_pod_template?(nested) }
+  else
+    false
   end
 end
 
@@ -67,7 +87,23 @@ end
 # searches, and the storefront is a more plausible wrong home for a form rate
 # limit than any of the database workloads.
 def workloads(documents)
+  documents.each do |document|
+    next if pod_spec(document)
+    next unless carries_pod_template?(document)
+    raise "#{document['kind']}/#{document.dig('metadata', 'name')} carries a pod " \
+          'template that pod_spec does not resolve'
+  end
   documents.select { |document| pod_spec(document) }
+end
+
+# initContainers run with the same Secret access, the same volumes and the same
+# privileges as the containers beside them, so an assertion that skips them
+# checks half the pod. ephemeralContainers are included for the same reason:
+# nothing here should be able to arrive through a debug surface either.
+def pod_containers(pod)
+  pod.fetch('containers', []) +
+    pod.fetch('initContainers', []) +
+    pod.fetch('ephemeralContainers', [])
 end
 
 ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
@@ -77,14 +113,25 @@ ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
 # address at one carries no identity and is not what this boundary forbids. The
 # real per-environment addresses are injected from Orange and never rendered
 # here. Everything outside this set is still refused.
-RESERVED_ADDRESS = %r{
+RESERVED_EXAMPLE_DOMAINS = %w[example.com example.org example.net].freeze
+RESERVED_SUFFIX_LABELS = %w[invalid test example localhost].freeze
+
+RESERVED_ADDRESS = /
   \A[A-Za-z0-9._%+-]+@
-  (?:
-    (?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)
-    |
-    (?:[A-Za-z0-9-]+\.)*(?:invalid|test|example|localhost)
-  )\z
-}xi.freeze
+  (?:[A-Za-z0-9-]+\.)*
+  (?:#{(RESERVED_EXAMPLE_DOMAINS + RESERVED_SUFFIX_LABELS).map { |name| Regexp.escape(name) }.join('|')})
+  \z
+/xi.freeze
+
+# Structural control on the exemption itself, not on samples of it. The sample
+# list below proves the boundary still fires for whole shape classes, but no
+# finite sample can notice one specific real domain being quietly added to the
+# exemption — which is the widening a later reader under pressure is most likely
+# to attempt. Restating the accepted set here forces any addition to be made
+# twice, in two places a reviewer reads together.
+raise 'the reserved-name exemption changed without its declaration being updated' unless
+  RESERVED_EXAMPLE_DOMAINS == %w[example.com example.org example.net] &&
+  RESERVED_SUFFIX_LABELS == %w[invalid test example localhost]
 
 def public_account_addresses(text)
   text.scan(ADDRESS_SHAPE).reject { |address| RESERVED_ADDRESS.match?(address) }.uniq
@@ -118,7 +165,7 @@ def assert_pod_hardening(document)
   raise 'host namespaces are forbidden' if pod['hostNetwork'] || pod['hostPID'] || pod['hostIPC']
   raise 'pod must run non-root' unless pod.dig('securityContext', 'runAsNonRoot') == true
   raise 'RuntimeDefault seccomp is required' unless pod.dig('securityContext', 'seccompProfile', 'type') == 'RuntimeDefault'
-  pod.fetch('containers').each do |container|
+  pod_containers(pod).each do |container|
     security = container.fetch('securityContext')
     raise 'privilege escalation is forbidden' unless security['allowPrivilegeEscalation'] == false
     raise 'all capabilities must be dropped' unless security.dig('capabilities', 'drop') == ['ALL']
@@ -397,7 +444,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'Redis must be digest pinned' unless redis_image&.match?(%r{\Aredis:[^@]+@sha256:[0-9a-f]{64}\z})
 
   application_images = documents.flat_map do |document|
-    pod_spec(document)&.fetch('containers', [])&.map { |container| container['image'] } || []
+    (pod = pod_spec(document)) ? pod_containers(pod).map { |container| container['image'] } : []
   end.select { |image| image&.start_with?('ghcr.io/hannosirkel/plepic-') }
   raise 'Task 4 backend image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-backend@#{SENTINEL}") == 4
   raise 'Task 4 storefront image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-storefront@#{SENTINEL}") == 1
@@ -467,7 +514,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   end
   newsletter_keys = %w[NEWSLETTER_API_KEY NEWSLETTER_LIST_ID]
   newsletter_consumers = workloads(documents).filter_map do |workload|
-    containers = pod_spec(workload).fetch('containers', [])
+    containers = pod_containers(pod_spec(workload))
     keys = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
       entry['name'] if newsletter_keys.include?(entry['name'])
     end.uniq.sort
@@ -478,10 +525,18 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   }
   newsletter_limit_keys = %w[NEWSLETTER_RATE_LIMIT_MAX NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS]
   newsletter_limit_environment = workloads(documents).filter_map do |workload|
-    containers = pod_spec(workload).fetch('containers', [])
+    containers = pod_containers(pod_spec(workload))
     next unless newsletter_limit_keys.any? { |name| env_present?(containers, name) }
     values = newsletter_limit_keys.to_h do |name|
-      [name, optional_env_value(containers.first, name)]
+      # Read from whichever container carries the entry, not from container 0.
+      # Reading the first container would let a sidecar on the backend declare a
+      # conflicting limit invisibly, because container 0 already supplies the
+      # expected value and the comparison below would never see the difference.
+      declared = containers.filter_map { |container| env_entry(container, name) }
+        .map { |entry| entry['value'] }.uniq
+      raise "#{workload.dig('metadata', 'name')} declares conflicting #{name} across containers" if
+        declared.length > 1
+      [name, declared.first]
     end
     [workload.dig('metadata', 'name'), values]
   end.to_h
@@ -525,7 +580,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   secret_references = Hash.new { |hash, key| hash[key] = [] }
   documents.each do |document|
     next unless (pod = pod_spec(document))
-    pod.fetch('containers', []).each do |container|
+    pod_containers(pod).each do |container|
       container.fetch('env', []).each do |entry|
         reference = entry.dig('valueFrom', 'secretKeyRef')
         secret_references[reference['name']] << reference['key'] if reference
@@ -557,7 +612,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
 
   runtime_superuser_consumers = documents.filter_map do |document|
     next unless (pod = pod_spec(document))
-    references_superuser = pod.fetch('containers', []).any? do |container|
+    references_superuser = pod_containers(pod).any? do |container|
       container.fetch('env', []).any? do |entry|
         entry.dig('valueFrom', 'secretKeyRef', 'key') == 'POSTGRES_SUPERUSER_PASSWORD'
       end
@@ -572,7 +627,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     asset_volume_names = pod.fetch('volumes', []).filter_map do |volume|
       volume['name'] if volume.dig('persistentVolumeClaim', 'claimName') == "plepic-assets#{suffix}"
     end
-    mounts = pod.fetch('containers', []).flat_map { |container| container.fetch('volumeMounts', []) }
+    mounts = pod_containers(pod).flat_map { |container| container.fetch('volumeMounts', []) }
     document.dig('metadata', 'name') if mounts.any? { |mount| asset_volume_names.include?(mount['name']) }
   end.sort
   raise 'assets PVC writer set mismatch' unless asset_mount_owners == %W[
