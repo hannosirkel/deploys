@@ -47,7 +47,10 @@ end
 def carries_pod_template?(value)
   case value
   when Hash
-    return true if value['containers'].is_a?(Array) || value['initContainers'].is_a?(Array)
+    # The same three lists pod_containers reads. A detector that tested fewer
+    # would let a template hide in the one the traversal still walks.
+    return true if %w[containers initContainers ephemeralContainers]
+      .any? { |list| value[list].is_a?(Array) }
     value.each_value.any? { |nested| carries_pod_template?(nested) }
   when Array
     value.any? { |nested| carries_pod_template?(nested) }
@@ -116,22 +119,32 @@ ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
 RESERVED_EXAMPLE_DOMAINS = %w[example.com example.org example.net].freeze
 RESERVED_SUFFIX_LABELS = %w[invalid test example localhost].freeze
 
-RESERVED_ADDRESS = /
-  \A[A-Za-z0-9._%+-]+@
-  (?:[A-Za-z0-9-]+\.)*
-  (?:#{(RESERVED_EXAMPLE_DOMAINS + RESERVED_SUFFIX_LABELS).map { |name| Regexp.escape(name) }.join('|')})
-  \z
-/xi.freeze
+def build_reserved_address(example_domains, suffix_labels)
+  /
+    \A[A-Za-z0-9._%+-]+@
+    (?:[A-Za-z0-9-]+\.)*
+    (?:#{(example_domains + suffix_labels).map { |name| Regexp.escape(name) }.join('|')})
+    \z
+  /xi
+end
+
+RESERVED_ADDRESS = build_reserved_address(RESERVED_EXAMPLE_DOMAINS, RESERVED_SUFFIX_LABELS).freeze
 
 # Structural control on the exemption itself, not on samples of it. The sample
 # list below proves the boundary still fires for whole shape classes, but no
-# finite sample can notice one specific real domain being quietly added to the
-# exemption — which is the widening a later reader under pressure is most likely
-# to attempt. Restating the accepted set here forces any addition to be made
-# twice, in two places a reviewer reads together.
+# finite sample can notice one specific real domain being quietly added — which
+# is the widening a later reader under pressure is most likely to attempt.
+#
+# Both halves are needed. Pinning the declarations alone still allowed an
+# alternative to be added straight to the pattern, leaving the lists untouched
+# and the suite green; so the pattern is also required to be exactly what those
+# declarations generate. Regexp equality compares source and options, so the two
+# cannot drift apart.
 raise 'the reserved-name exemption changed without its declaration being updated' unless
   RESERVED_EXAMPLE_DOMAINS == %w[example.com example.org example.net] &&
   RESERVED_SUFFIX_LABELS == %w[invalid test example localhost]
+raise 'the reserved-name pattern does not match the set it claims to encode' unless
+  RESERVED_ADDRESS == build_reserved_address(RESERVED_EXAMPLE_DOMAINS, RESERVED_SUFFIX_LABELS)
 
 def public_account_addresses(text)
   text.scan(ADDRESS_SHAPE).reject { |address| RESERVED_ADDRESS.match?(address) }.uniq
@@ -352,9 +365,11 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'Role and RoleBinding are forbidden' if documents.any? { |document| %w[Role RoleBinding ClusterRole ClusterRoleBinding].include?(document['kind']) }
   raise 'resource namespace mismatch' unless documents.all? { |document| document.dig('metadata', 'namespace') == namespace }
 
-  %w[Deployment StatefulSet Job].each do |kind|
-    documents.select { |document| document['kind'] == kind }.each { |document| assert_pod_hardening(document) }
-  end
+  # Driven from the resolution set, never from a kind literal. A hardcoded list
+  # here is how the hardening set silently diverged from what pod_spec resolves,
+  # leaving a privileged DaemonSet or CronJob recognised everywhere except the
+  # one assertion that would have refused it.
+  workloads(documents).each { |document| assert_pod_hardening(document) }
 
   service_account = resource(documents, 'ServiceAccount', "plepic-predeploy#{suffix}")
   raise 'predeploy service account must not mount a token' unless service_account['automountServiceAccountToken'] == false
