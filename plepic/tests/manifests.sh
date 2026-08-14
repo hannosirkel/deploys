@@ -46,9 +46,28 @@ end
 # carry a variable rather than what its value is. Unlike env_value this never
 # raises, so a caller can prove a variable is scoped to one workload without
 # dying on the first workload that correctly lacks it.
+def env_entry(container, name)
+  container.fetch('env', []).find { |item| item['name'] == name }
+end
+
 def optional_env_value(container, name)
-  entry = container.fetch('env', []).find { |item| item['name'] == name }
+  entry = env_entry(container, name)
   entry && entry['value']
+end
+
+# Presence, not truthiness. A variable delivered by reference — configMapKeyRef,
+# fieldRef, a bare name — has no literal value, so a guard written on the value
+# would silently drop the workload carrying it and report the variable absent.
+def env_present?(containers, name)
+  containers.any? { |container| env_entry(container, name) }
+end
+
+# Every workload in the document set, not a hand-listed subset. An assertion
+# that a variable lives on exactly one workload is only as strong as the set it
+# searches, and the storefront is a more plausible wrong home for a form rate
+# limit than any of the database workloads.
+def workloads(documents)
+  documents.select { |document| pod_spec(document) }
 end
 
 ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
@@ -447,22 +466,24 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise 'backend-family merchant legal contract mismatch' unless actual_merchant_environment == merchant_environment
   end
   newsletter_keys = %w[NEWSLETTER_API_KEY NEWSLETTER_LIST_ID]
-  newsletter_consumers = database_workloads.filter_map do |workload|
-    container = pod_spec(workload).dig('containers', 0)
-    keys = container.fetch('env', []).filter_map do |entry|
+  newsletter_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_spec(workload).fetch('containers', [])
+    keys = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
       entry['name'] if newsletter_keys.include?(entry['name'])
-    end.sort
+    end.uniq.sort
     [workload.dig('metadata', 'name'), keys] unless keys.empty?
   end.to_h
   raise 'newsletter credentials must be projected only to the backend' unless newsletter_consumers == {
     "plepic-backend#{suffix}" => newsletter_keys.sort,
   }
-  newsletter_limit_environment = database_workloads.filter_map do |workload|
-    container = pod_spec(workload).dig('containers', 0)
-    values = %w[NEWSLETTER_RATE_LIMIT_MAX NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS].to_h do |name|
-      [name, optional_env_value(container, name)]
+  newsletter_limit_keys = %w[NEWSLETTER_RATE_LIMIT_MAX NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS]
+  newsletter_limit_environment = workloads(documents).filter_map do |workload|
+    containers = pod_spec(workload).fetch('containers', [])
+    next unless newsletter_limit_keys.any? { |name| env_present?(containers, name) }
+    values = newsletter_limit_keys.to_h do |name|
+      [name, optional_env_value(containers.first, name)]
     end
-    [workload.dig('metadata', 'name'), values] if values.values.any?
+    [workload.dig('metadata', 'name'), values]
   end.to_h
   raise 'newsletter rate limit must be a backend-only explicit deployment contract' unless newsletter_limit_environment == {
     "plepic-backend#{suffix}" => {
