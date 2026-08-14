@@ -40,6 +40,26 @@ spec:
             - {name: DATABASE_USER, value: medusa}
             - name: DATABASE_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            - name: STRIPE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_SECRET_KEY}}
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+            - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID}}
+            - {name: SMTP_HOST, value: smtp.invalid}
+            - {name: SMTP_PORT, value: "587"}
+            - {name: SMTP_ENVELOPE_FROM, value: orders@example.com}
+            - {name: CONTACT_MAIL_RECIPIENT, value: contact@example.com}
+            - {name: MERCHANT_LEGAL_NAME, value: "Example Games OÜ"}
+            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Example Street 1, Tallinn"}
+            - {name: MERCHANT_CONTACT_ADDRESS, value: legal@example.com}
+            - {name: MERCHANT_RETURN_ADDRESS, value: "Return Street 2, Tallinn"}
+            - name: SMTP_USERNAME
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_USERNAME}}
+            - name: SMTP_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_PASSWORD}}
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: TURNSTILE_SECRET_KEY}}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
