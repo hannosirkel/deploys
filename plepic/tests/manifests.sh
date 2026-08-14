@@ -694,6 +694,20 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
       end
   end
 
+  # The mount layout alone does not confine the archive: the import reads its
+  # staging path from CATALOGUE_IMPORT_ARCHIVE_PATH, so an override could put the
+  # export back under the served root while every mount above stays correct.
+  # Either the variable is absent, and the application's own default under the
+  # staging mount applies, or it resolves inside that mount.
+  import_job = resource(documents, 'Job', "plepic-catalogue-import#{suffix}")
+  pod_containers(pod_spec(import_job)).each do |container|
+    declared = optional_env_value(container, 'CATALOGUE_IMPORT_ARCHIVE_PATH')
+    next if env_entry(container, 'CATALOGUE_IMPORT_ARCHIVE_PATH').nil?
+    raise 'the catalogue import archive path must resolve inside the import mount' unless
+      declared.is_a?(String) && declared.start_with?('/var/lib/plepic/import/') &&
+      !declared.include?('/../') && !declared.end_with?('/..')
+  end
+
   assert_network_contract(documents, suffix)
   rendered = File.read(path)
   raise 'IPv6 exposure is forbidden' if rendered.include?('::')
@@ -812,6 +826,42 @@ assert_mutation_rejected(
     'from' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0' } }],
     'ports' => [{ 'port' => 5432, 'protocol' => 'TCP' }],
   }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'served media root back at the PVC root',
+  "must serve media from the assets PVC's media subtree"
+) do |documents|
+  backend = resource(documents, 'Deployment', 'plepic-backend-test')
+  pod_spec(backend).fetch('containers').each do |container|
+    container.fetch('volumeMounts', []).each do |mount|
+      mount.delete('subPath') if mount['mountPath'] == '/app/static'
+    end
+  end
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'import staged into the served media subtree',
+  "must stage imports in the assets PVC's import subtree"
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').each do |container|
+    container.fetch('volumeMounts', []).each do |mount|
+      mount['subPath'] = 'media' if mount['mountPath'] == '/var/lib/plepic/import'
+    end
+  end
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path overridden into the served media root',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env') <<
+    { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH', 'value' => '/app/static/catalogue.tar.gz' }
 end
 
 puts 'Plepic manifest contract tests passed'
