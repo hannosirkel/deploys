@@ -42,6 +42,15 @@ def env_value(container, name)
   entry['value']
 end
 
+# Absence is a legitimate answer when the assertion is about *which* workloads
+# carry a variable rather than what its value is. Unlike env_value this never
+# raises, so a caller can prove a variable is scoped to one workload without
+# dying on the first workload that correctly lacks it.
+def optional_env_value(container, name)
+  entry = container.fetch('env', []).find { |item| item['name'] == name }
+  entry && entry['value']
+end
+
 def assert_pod_hardening(document)
   pod = pod_spec(document)
   raise "missing pod spec on #{document.dig('metadata', 'name')}" unless pod
@@ -410,7 +419,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   newsletter_limit_environment = database_workloads.filter_map do |workload|
     container = pod_spec(workload).dig('containers', 0)
     values = %w[NEWSLETTER_RATE_LIMIT_MAX NEWSLETTER_RATE_LIMIT_WINDOW_SECONDS].to_h do |name|
-      [name, env_value(container, name)]
+      [name, optional_env_value(container, name)]
     end
     [workload.dig('metadata', 'name'), values] if values.values.any?
   end.to_h
