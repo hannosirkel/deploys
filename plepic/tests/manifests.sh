@@ -51,6 +51,47 @@ def optional_env_value(container, name)
   entry && entry['value']
 end
 
+ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
+
+# RFC 2606 and RFC 6761 reserve these names precisely so documentation and
+# placeholders can use them. A reserved name can never be a real account, so an
+# address at one carries no identity and is not what this boundary forbids. The
+# real per-environment addresses are injected from Orange and never rendered
+# here. Everything outside this set is still refused.
+RESERVED_ADDRESS = %r{
+  \A[A-Za-z0-9._%+-]+@
+  (?:
+    (?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)
+    |
+    (?:[A-Za-z0-9-]+\.)*(?:invalid|test|example|localhost)
+  )\z
+}xi.freeze
+
+def public_account_addresses(text)
+  text.scan(ADDRESS_SHAPE).reject { |address| RESERVED_ADDRESS.match?(address) }.uniq
+end
+
+# Positive control. A boundary that never fires is indistinguishable from one
+# that is broken, and this one was widened deliberately — so prove on every run
+# that it still refuses a non-reserved address before trusting it to pass.
+# The forbidden samples use invented domains so this file carries no real
+# identity of its own.
+[
+  ['orders@merchant-domain.com', true],
+  ['person@some-company.co.uk', true],
+  ['billing@example.com.attacker.net', true],
+  ['orders@example.com', false],
+  ['orders-test@example.com', false],
+  ['legal@mail.example.org', false],
+  ['relay@smtp.invalid', false],
+  ['probe@host.test', false],
+].each do |address, expected_forbidden|
+  actual_forbidden = !public_account_addresses(address).empty?
+  next if actual_forbidden == expected_forbidden
+  raise "address boundary control failed: #{address.split('@').first}@… " \
+        "expected forbidden=#{expected_forbidden}, got #{actual_forbidden}"
+end
+
 def assert_pod_hardening(document)
   pod = pod_spec(document)
   raise "missing pod spec on #{document.dig('metadata', 'name')}" unless pod
@@ -522,7 +563,8 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   assert_network_contract(documents, suffix)
   rendered = File.read(path)
   raise 'IPv6 exposure is forbidden' if rendered.include?('::')
-  raise 'public account addresses are forbidden' if rendered.match?(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
+  offending_addresses = public_account_addresses(rendered)
+  raise "public account addresses are forbidden (#{offending_addresses.length} found)" unless offending_addresses.empty?
   rendered.scan(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/).each do |literal|
     next if ['0.0.0.0', '0.0.0.0/0'].include?(literal)
     raise "public IPv4 is forbidden: #{literal}" unless IPAddr.new(literal).private?
