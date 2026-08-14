@@ -699,13 +699,32 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # export back under the served root while every mount above stays correct.
   # Either the variable is absent, and the application's own default under the
   # staging mount applies, or it resolves inside that mount.
+  # Every occurrence, not the first. Kubernetes does not reject a duplicate env
+  # name and the later assignment is the effective one, so a guard that stops at
+  # the first match reads a value the container will never see.
   import_job = resource(documents, 'Job', "plepic-catalogue-import#{suffix}")
   pod_containers(pod_spec(import_job)).each do |container|
-    declared = optional_env_value(container, 'CATALOGUE_IMPORT_ARCHIVE_PATH')
-    next if env_entry(container, 'CATALOGUE_IMPORT_ARCHIVE_PATH').nil?
-    raise 'the catalogue import archive path must resolve inside the import mount' unless
-      declared.is_a?(String) && declared.start_with?('/var/lib/plepic/import/') &&
-      !declared.include?('/../') && !declared.end_with?('/..')
+    container.fetch('env', []).each do |entry|
+      next unless entry['name'] == 'CATALOGUE_IMPORT_ARCHIVE_PATH'
+      declared = entry['value']
+      # `$(OTHER)` is expanded from an earlier entry in the same container, so a
+      # literal that satisfies the prefix can still resolve outside the mount.
+      raise 'the catalogue import archive path must resolve inside the import mount' unless
+        declared.is_a?(String) && declared.start_with?('/var/lib/plepic/import/') &&
+        !declared.include?('/../') && !declared.end_with?('/..') &&
+        !declared.include?('$(')
+    end
+  end
+
+  # `envFrom` would deliver the same variable without ever appearing in `env`,
+  # and a `secretRef` would additionally pull every key of a Secret into the pod
+  # where the ESO key contract — which walks `env[].valueFrom.secretKeyRef` —
+  # cannot see it. Nothing here uses it, so refusing it outright costs nothing.
+  workloads(documents).each do |workload|
+    pod_containers(pod_spec(workload)).each do |container|
+      next if container.fetch('envFrom', []).empty?
+      raise "#{workload.dig('metadata', 'name')} must not deliver environment through envFrom"
+    end
   end
 
   assert_network_contract(documents, suffix)
@@ -862,6 +881,41 @@ assert_mutation_rejected(
   import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
   pod_spec(import_job).fetch('containers').first.fetch('env') <<
     { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH', 'value' => '/app/static/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path duplicated with a hostile second entry',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  environment = pod_spec(import_job).fetch('containers').first.fetch('env')
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/var/lib/plepic/import/catalogue.tar.gz' }
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/app/static/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path escaping through variable expansion',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  environment = pod_spec(import_job).fetch('containers').first.fetch('env')
+  environment.unshift({ 'name' => 'ESCAPE', 'value' => '../../../app/static' })
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/var/lib/plepic/import/$(ESCAPE)/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'runtime Secret pulled in wholesale through envFrom',
+  'must not deliver environment through envFrom'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first['envFrom'] =
+    [{ 'secretRef' => { 'name' => 'plepic-test-runtime-credentials' } }]
 end
 
 puts 'Plepic manifest contract tests passed'
