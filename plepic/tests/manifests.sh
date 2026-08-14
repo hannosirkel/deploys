@@ -665,6 +665,68 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     plepic-worker#{suffix}
   ].sort
 
+  # The served media root and the import staging directory must be disjoint
+  # subtrees of the assets PVC. They were once the same subtree, which made a
+  # staged WooCommerce export — customer accounts, sessions and order history —
+  # publicly downloadable under /static the moment an import left one behind.
+  # Deleting the archive is the other half of that fix; this is the half that
+  # holds when a future exit path forgets to.
+  documents.each do |document|
+    next unless (pod = pod_spec(document))
+    name = document.dig('metadata', 'name')
+    assets_volumes = pod.fetch('volumes', []).filter_map do |volume|
+      volume['name'] if volume.dig('persistentVolumeClaim', 'claimName') == "plepic-assets#{suffix}"
+    end
+    next if assets_volumes.empty?
+    pod_containers(pod).flat_map { |container| container.fetch('volumeMounts', []) }
+      .select { |mount| assets_volumes.include?(mount['name']) }
+      .each do |mount|
+        case mount['mountPath']
+        when '/app/static'
+          raise "#{name} must serve media from the assets PVC's media subtree" unless
+            mount['subPath'] == 'media'
+        when '/var/lib/plepic/import'
+          raise "#{name} must stage imports in the assets PVC's import subtree" unless
+            mount['subPath'] == 'import'
+        else
+          raise "#{name} mounts the assets PVC at an undeclared path #{mount['mountPath']}"
+        end
+      end
+  end
+
+  # The mount layout alone does not confine the archive: the import reads its
+  # staging path from CATALOGUE_IMPORT_ARCHIVE_PATH, so an override could put the
+  # export back under the served root while every mount above stays correct.
+  # Either the variable is absent, and the application's own default under the
+  # staging mount applies, or it resolves inside that mount.
+  # Every occurrence, not the first. Kubernetes does not reject a duplicate env
+  # name and the later assignment is the effective one, so a guard that stops at
+  # the first match reads a value the container will never see.
+  import_job = resource(documents, 'Job', "plepic-catalogue-import#{suffix}")
+  pod_containers(pod_spec(import_job)).each do |container|
+    container.fetch('env', []).each do |entry|
+      next unless entry['name'] == 'CATALOGUE_IMPORT_ARCHIVE_PATH'
+      declared = entry['value']
+      # `$(OTHER)` is expanded from an earlier entry in the same container, so a
+      # literal that satisfies the prefix can still resolve outside the mount.
+      raise 'the catalogue import archive path must resolve inside the import mount' unless
+        declared.is_a?(String) && declared.start_with?('/var/lib/plepic/import/') &&
+        !declared.include?('/../') && !declared.end_with?('/..') &&
+        !declared.include?('$(')
+    end
+  end
+
+  # `envFrom` would deliver the same variable without ever appearing in `env`,
+  # and a `secretRef` would additionally pull every key of a Secret into the pod
+  # where the ESO key contract — which walks `env[].valueFrom.secretKeyRef` —
+  # cannot see it. Nothing here uses it, so refusing it outright costs nothing.
+  workloads(documents).each do |workload|
+    pod_containers(pod_spec(workload)).each do |container|
+      next if container.fetch('envFrom', []).empty?
+      raise "#{workload.dig('metadata', 'name')} must not deliver environment through envFrom"
+    end
+  end
+
   assert_network_contract(documents, suffix)
   rendered = File.read(path)
   raise 'IPv6 exposure is forbidden' if rendered.include?('::')
@@ -783,6 +845,77 @@ assert_mutation_rejected(
     'from' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0' } }],
     'ports' => [{ 'port' => 5432, 'protocol' => 'TCP' }],
   }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'served media root back at the PVC root',
+  "must serve media from the assets PVC's media subtree"
+) do |documents|
+  backend = resource(documents, 'Deployment', 'plepic-backend-test')
+  pod_spec(backend).fetch('containers').each do |container|
+    container.fetch('volumeMounts', []).each do |mount|
+      mount.delete('subPath') if mount['mountPath'] == '/app/static'
+    end
+  end
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'import staged into the served media subtree',
+  "must stage imports in the assets PVC's import subtree"
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').each do |container|
+    container.fetch('volumeMounts', []).each do |mount|
+      mount['subPath'] = 'media' if mount['mountPath'] == '/var/lib/plepic/import'
+    end
+  end
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path overridden into the served media root',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env') <<
+    { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH', 'value' => '/app/static/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path duplicated with a hostile second entry',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  environment = pod_spec(import_job).fetch('containers').first.fetch('env')
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/var/lib/plepic/import/catalogue.tar.gz' }
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/app/static/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'archive path escaping through variable expansion',
+  'archive path must resolve inside the import mount'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  environment = pod_spec(import_job).fetch('containers').first.fetch('env')
+  environment.unshift({ 'name' => 'ESCAPE', 'value' => '../../../app/static' })
+  environment << { 'name' => 'CATALOGUE_IMPORT_ARCHIVE_PATH',
+                   'value' => '/var/lib/plepic/import/$(ESCAPE)/catalogue.tar.gz' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'runtime Secret pulled in wholesale through envFrom',
+  'must not deliver environment through envFrom'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first['envFrom'] =
+    [{ 'secretRef' => { 'name' => 'plepic-test-runtime-credentials' } }]
 end
 
 puts 'Plepic manifest contract tests passed'
