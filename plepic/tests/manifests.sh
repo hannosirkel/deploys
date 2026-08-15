@@ -125,6 +125,38 @@ end
 
 BACKEND_IMAGE = 'ghcr.io/hannosirkel/plepic-backend'.freeze
 
+# An image reference reduced to its repository, discarding tag and digest.
+#
+# Matching the digest form alone is not enough. A container naming the same
+# image by tag is invisible to a `…@` prefix test, and the two things that make
+# that unreachable today are both temporary: the overlay's `images:` transformer
+# rewrites any container using this repository to the pinned digest, and the
+# transitional all-zero sentinel counter refuses a fifth digest-pinned
+# container. The sentinel counter is rewritten at the first digest promotion,
+# which is exactly when a guard resting on it would quietly stop holding.
+#
+# A tag is the part after the last colon of the final path segment, so the colon
+# in a registry's `host:port` is not mistaken for one.
+def image_repository(reference)
+  repository = reference.to_s.split('@', 2).first.to_s
+  return repository unless repository.split('/').last.to_s.include?(':')
+  repository[0...repository.rindex(':')]
+end
+
+# Positive control on the reducer itself. Every form below names the same
+# repository, and the near-miss must not.
+{
+  'ghcr.io/hannosirkel/plepic-backend' => BACKEND_IMAGE,
+  'ghcr.io/hannosirkel/plepic-backend:latest' => BACKEND_IMAGE,
+  "ghcr.io/hannosirkel/plepic-backend@sha256:#{'0' * 64}" => BACKEND_IMAGE,
+  "ghcr.io/hannosirkel/plepic-backend:v1@sha256:#{'0' * 64}" => BACKEND_IMAGE,
+  'registry.example:5000/hannosirkel/plepic-backend' => 'registry.example:5000/hannosirkel/plepic-backend',
+  'ghcr.io/hannosirkel/plepic-backend-tools:latest' => 'ghcr.io/hannosirkel/plepic-backend-tools',
+}.each do |reference, expected|
+  actual = image_repository(reference)
+  raise "image repository control failed: #{reference} reduced to #{actual}" unless actual == expected
+end
+
 # What the backend image requires of anything that runs it.
 #
 # Declared here, not read from `hannosirkel/plepic`. That repository is not
@@ -607,15 +639,16 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise 'backend-family merchant legal contract mismatch' unless actual_merchant_environment == merchant_environment
   end
 
-  # Selected by the image they run, not by a hand-written list of names. The
-  # question this answers is "does everything running the backend image supply
-  # what that image requires", so anything that acquires the image later — a
-  # second Job, a sidecar, a debug ephemeral container — is inside the guard the
-  # moment it appears, rather than the moment someone remembers to add it.
+  # Selected by the repository they run, not by a hand-written list of names and
+  # not by the digest form. The question this answers is "does everything
+  # running the backend image supply what that image requires", so anything that
+  # acquires the image later — a second Job, a sidecar, a debug ephemeral
+  # container, by tag or by digest — is inside the guard the moment it appears,
+  # rather than the moment someone remembers to add it.
   backend_image_containers = documents.flat_map do |document|
     next [] unless (pod = pod_spec(document))
     pod_containers(pod)
-      .select { |container| container['image'].to_s.start_with?("#{BACKEND_IMAGE}@") }
+      .select { |container| image_repository(container['image']) == BACKEND_IMAGE }
       .map { |container| [document.dig('metadata', 'name'), container] }
   end
   expected_backend_image_workloads = %W[
@@ -624,21 +657,26 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     plepic-predeploy#{suffix}
     plepic-worker#{suffix}
   ].sort
+  # Which *workloads* run it, deduplicated on purpose: a second backend-image
+  # container inside one of these pods is not a set violation, it is one more
+  # container that has to satisfy the environment contract below. Comparing the
+  # undeduplicated list would refuse it here and never check its environment.
   raise 'backend-image workload set mismatch' unless
-    backend_image_containers.map(&:first).sort == expected_backend_image_workloads
+    backend_image_containers.map(&:first).uniq.sort == expected_backend_image_workloads
   backend_image_containers.each do |name, container|
+    where = "#{name}/#{container['name']}"
     declared = container.fetch('env', []).map { |entry| entry['name'] }
     missing = BACKEND_IMAGE_REQUIRED_ENVIRONMENT.reject { |variable| declared.include?(variable) }
-    raise "#{name} does not supply the backend image's required environment: #{missing.join(' ')}" unless
+    raise "#{where} does not supply the backend image's required environment: #{missing.join(' ')}" unless
       missing.empty?
     SAME_ORIGIN_CORS_VARIABLES.each do |variable|
       # Every occurrence, not the first. Kubernetes accepts a duplicate name and
       # the later assignment is the effective one, so a guard that stops at the
       # first match would read a value the container never sees.
       entries = container.fetch('env', []).select { |entry| entry['name'] == variable }
-      raise "#{name} must declare #{variable} exactly once" unless entries.length == 1
+      raise "#{where} must declare #{variable} exactly once" unless entries.length == 1
       entry = entries.first
-      raise "#{name} must declare #{variable} as an explicit empty value" unless
+      raise "#{where} must declare #{variable} as an explicit empty value" unless
         entry['value'] == '' && !entry.key?('valueFrom')
     end
   end
@@ -1023,7 +1061,7 @@ end
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'a backend-image workload missing a CORS variable',
-  "does not supply the backend image's required environment: STORE_CORS"
+  "plepic-worker-test/worker does not supply the backend image's required environment: STORE_CORS"
 ) do |documents|
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env')
@@ -1085,6 +1123,33 @@ assert_mutation_rejected(
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env') <<
     { 'name' => 'STORE_CORS', 'value' => 'https://store.example.test' }
+end
+
+# A backend-image sidecar named by *tag*. The sentinel counter counts exact
+# digest strings, so a tag-form reference slips past it entirely — this is the
+# case a guard written on the `…@` prefix could not see, and the one that
+# outlives the sentinel. It is hardened and resourced so the mutation reaches
+# the environment contract rather than dying in pod hardening, and it is
+# appended so the resource contract still reads container 0.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a backend-image sidecar referenced by tag',
+  "plepic-backend-test/rogue-sidecar does not supply the backend image's required environment"
+) do |documents|
+  backend = resource(documents, 'Deployment', 'plepic-backend-test')
+  pod_spec(backend).fetch('containers') << {
+    'name' => 'rogue-sidecar',
+    'image' => 'ghcr.io/hannosirkel/plepic-backend:latest',
+    'securityContext' => {
+      'allowPrivilegeEscalation' => false,
+      'capabilities' => { 'drop' => ['ALL'] },
+      'readOnlyRootFilesystem' => true,
+    },
+    'resources' => {
+      'requests' => { 'cpu' => '100m', 'memory' => '128Mi' },
+      'limits' => { 'cpu' => '500m', 'memory' => '512Mi' },
+    },
+  }
 end
 
 # The image-count guard above already refuses a fifth backend-image container,

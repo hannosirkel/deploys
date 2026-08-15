@@ -46,7 +46,9 @@ spec:
             # The migration Job runs the backend image and loads the same
             # configuration at module scope, so it needs the same session secrets
             # the two Deployments read — from the same Secret, under the same
-            # keys. This is the PreSync hook: a configuration it cannot construct
+            # keys. This is a Sync hook, and the wave is what gates it: data
+            # services are -20, this Job is -10, and every Deployment and the
+            # import Job is 0 — so a configuration this Job cannot construct
             # fails the sync before any application pod is created.
             - name: COOKIE_SECRET
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: COOKIE_SECRET}}
