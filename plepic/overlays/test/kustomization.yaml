@@ -235,6 +235,10 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-database-admin, key: MEDUSA_ADMIN_EMAIL}}
                   - name: MEDUSA_ADMIN_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-database-admin, key: MEDUSA_ADMIN_PASSWORD}}
+                  - name: COOKIE_SECRET
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: COOKIE_SECRET}}
+                  - name: JWT_SECRET
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: JWT_SECRET}}
                   - name: STRIPE_SECRET_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
                   - name: STRIPE_WEBHOOK_SECRET
@@ -272,6 +276,10 @@ patches:
                   - {name: DATABASE_NAME, value: plepic_test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: COOKIE_SECRET
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: COOKIE_SECRET}}
+                  - name: JWT_SECRET
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: JWT_SECRET}}
                   - name: STRIPE_SECRET_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
                   - name: STRIPE_WEBHOOK_SECRET

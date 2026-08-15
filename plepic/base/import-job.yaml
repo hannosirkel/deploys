@@ -40,6 +40,19 @@ spec:
             - {name: DATABASE_USER, value: medusa}
             - name: DATABASE_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            # The import runs the backend image and loads the same configuration
+            # at module scope, so it needs the same session secrets the two
+            # Deployments read — from the same Secret, under the same keys. It
+            # signs nothing; it simply cannot construct a configuration without
+            # them.
+            - name: COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: COOKIE_SECRET}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: JWT_SECRET}}
+            # Empty on purpose — see backend.yaml.
+            - {name: STORE_CORS, value: ""}
+            - {name: ADMIN_CORS, value: ""}
+            - {name: AUTH_CORS, value: ""}
             - name: STRIPE_SECRET_KEY
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_SECRET_KEY}}
             - name: STRIPE_WEBHOOK_SECRET
