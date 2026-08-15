@@ -28,6 +28,21 @@ private per-environment configuration before deployment. Storefront and every
 backend-image workload deliberately receive the same four `MERCHANT_*` values,
 because the storefront legal pages and durable order-confirmation email resolve
 the same approved withdrawal notice.
+
+`STORE_CORS`, `ADMIN_CORS`, and `AUTH_CORS` are declared on every backend-image
+workload with an explicitly empty value, and must stay empty. Nothing reaches
+the backend cross-origin: the storefront proxies the allowlisted `/store-api`
+prefixes from its own origin and Medusa Admin is served by the backend itself,
+so an origin here would be a public hostname this repository must not carry.
+They are declared rather than omitted because the image requires all three at
+module scope — a workload that simply forgot them must still fail loudly — and
+the same reasoning puts `JWT_SECRET` and `COOKIE_SECRET` on the migration and
+catalogue-import Jobs, which construct the whole configuration before doing any
+work. The contract test asserts the full required set against every workload
+running the backend image; that list is declared in `tests/manifests.sh` and
+names its source, because the image's repository is not readable at validation
+time.
+
 Newsletter API credentials are an existing runtime Secret projection but are
 mounted only by the backend API pod; workers and lifecycle Jobs cannot subscribe
 addresses. That pod also enforces a deployment-wide limit of 20 valid signup

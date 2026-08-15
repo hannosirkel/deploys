@@ -54,6 +54,17 @@ spec:
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: COOKIE_SECRET}}
             - name: JWT_SECRET
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: JWT_SECRET}}
+            # Empty on purpose, and declared rather than omitted. Nothing reaches
+            # this backend cross-origin: the storefront proxies the allowlisted
+            # /store-api prefixes from its own origin and Admin is served by the
+            # backend itself, so an allowed origin here would be a public
+            # hostname this repository must not carry and an exposure the plan
+            # forbids. Declaring the empty value keeps the intent auditable while
+            # leaving the image's requirement fail-closed, so a workload that
+            # simply forgot these still refuses to start.
+            - {name: STORE_CORS, value: ""}
+            - {name: ADMIN_CORS, value: ""}
+            - {name: AUTH_CORS, value: ""}
             - {name: SMTP_HOST, value: smtp.invalid}
             - {name: SMTP_PORT, value: "587"}
             - {name: SMTP_ENVELOPE_FROM, value: orders@example.com}
