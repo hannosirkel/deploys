@@ -145,12 +145,19 @@ end
 
 # Positive control on the reducer itself. Every form below names the same
 # repository, and the near-miss must not.
+#
+# The port-and-tag row is the one that pins the reasoning above rather than
+# merely exercising it: a registry port and a tag are the only shape where the
+# *last* colon and the *first* colon differ, so without it the comment's claim
+# about which colon is the tag is unasserted and `rindex` could be spelled
+# `index` with the whole contract still green.
 {
   'ghcr.io/hannosirkel/plepic-backend' => BACKEND_IMAGE,
   'ghcr.io/hannosirkel/plepic-backend:latest' => BACKEND_IMAGE,
   "ghcr.io/hannosirkel/plepic-backend@sha256:#{'0' * 64}" => BACKEND_IMAGE,
   "ghcr.io/hannosirkel/plepic-backend:v1@sha256:#{'0' * 64}" => BACKEND_IMAGE,
   'registry.example:5000/hannosirkel/plepic-backend' => 'registry.example:5000/hannosirkel/plepic-backend',
+  'registry.example:5000/hannosirkel/plepic-backend:v1' => 'registry.example:5000/hannosirkel/plepic-backend',
   'ghcr.io/hannosirkel/plepic-backend-tools:latest' => 'ghcr.io/hannosirkel/plepic-backend-tools',
 }.each do |reference, expected|
   actual = image_repository(reference)
