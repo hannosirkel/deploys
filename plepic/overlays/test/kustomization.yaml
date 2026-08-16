@@ -286,6 +286,10 @@ patches:
                   - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
                   - {name: REDIS_HOST, value: plepic-redis-test}
+                  # This environment's identity, compared against the one
+                  # recorded for the staged archive. A copied patch block that
+                  # left this on `live` is what would import a live export here.
+                  - {name: CATALOGUE_IMPORT_ENVIRONMENT, value: test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD

@@ -227,12 +227,31 @@ end
 # compared the two sides. Task 4 reviewed the manifests against the plan and
 # Task 5 reviewed the image against the plan, and four workloads shipped
 # without STORE_CORS, ADMIN_CORS or AUTH_CORS while both gates stayed green.
+#
+# REDIS_HOST and REDIS_PORT are here for the same "plus" that admits the
+# DATABASE_* parts, and the reasoning is worth stating because it is not the
+# obvious one. They are not in `requiredEnvironmentVariables`; they are required
+# because `readBackendRuntimeConfig` calls `readRedisRuntimeConfig` at
+# `runtime.ts:430` unconditionally, which requires all three. Listing them here
+# is not redundant with the Service-endpoint table further down either: that
+# table reads them with `fetch`, so a workload that omits one died there with
+# `key not found: "REDIS_HOST"` — a crash naming the lookup rather than a
+# refusal naming the workload and the variable. This list runs first and says
+# which workload is missing what.
+#
+# REDIS_PASSWORD is deliberately *not* here. The per-workload Redis secret
+# contract above refuses its absence first and refuses strictly more — the
+# Secret it comes from and the key within it — so an entry here would be one no
+# mutation can reach, and an assertion no mutation can reach is one a future
+# edit deletes in silence.
 BACKEND_IMAGE_REQUIRED_ENVIRONMENT = %w[
   DATABASE_HOST
   DATABASE_PORT
   DATABASE_NAME
   DATABASE_USER
   DATABASE_PASSWORD
+  REDIS_HOST
+  REDIS_PORT
   JWT_SECRET
   COOKIE_SECRET
   STORE_CORS
@@ -298,6 +317,62 @@ raise 'the reserved-name exemption changed without its declaration being updated
   RESERVED_SUFFIX_LABELS == %w[invalid test example localhost]
 raise 'the reserved-name pattern does not match the set it claims to encode' unless
   RESERVED_ADDRESS == build_reserved_address(RESERVED_EXAMPLE_DOMAINS, RESERVED_SUFFIX_LABELS)
+
+# The same exemption one level up: a bare *hostname*, not an address at one.
+#
+# `build_reserved_address` cannot answer this question and does not reach it —
+# its pattern requires a `local-part@`, so a bare hostname or a URL never enters
+# it. That gap mattered: the contact recipient is refused structurally by
+# `backend-family contact recipient must be synthetic` and again by the
+# whole-file address scan, and the SMTP host by its `.invalid` suffix, while the
+# three SITE_* values were the only externally-facing names in these manifests
+# with no structural boundary at all. An exact-value comparison is not one: it
+# refuses an overlay that drifts from the option table, and an editor who
+# changes both in the same commit — which exact equality *forces* — moves past
+# it with the suite green.
+#
+# Anchored at a label boundary rather than written as `end_with?`, so a real
+# domain that merely ends in the right letters is refused.
+def build_reserved_hostname(example_domains, suffix_labels)
+  /
+    \A(?:[A-Za-z0-9-]+\.)*
+    (?:#{(example_domains + suffix_labels).map { |name| Regexp.escape(name) }.join('|')})
+    \z
+  /xi
+end
+
+RESERVED_HOSTNAME = build_reserved_hostname(RESERVED_EXAMPLE_DOMAINS, RESERVED_SUFFIX_LABELS).freeze
+
+# The same structural control the address pattern carries above, for the same
+# reason: pinning the two declarations alone would still allow an alternative to
+# be added straight to this pattern with the lists untouched.
+raise 'the reserved-hostname pattern does not match the set it claims to encode' unless
+  RESERVED_HOSTNAME == build_reserved_hostname(RESERVED_EXAMPLE_DOMAINS, RESERVED_SUFFIX_LABELS)
+
+# Controls, in the shape of the address controls below and for the same reason.
+# The forbidden samples are invented names, so this file carries no real
+# identity of its own. `notexample.com` and `mytest` are the rows that separate
+# a label-anchored pattern from a bare suffix test — both would be accepted by
+# `end_with?`, and one of them is how a real domain would arrive.
+{
+  'example.com' => false,
+  'test.example.org' => false,
+  'shop.staging.example.net' => false,
+  'relay.smtp.invalid' => false,
+  'host.test' => false,
+  'localhost' => false,
+  'shop.merchant-domain.com' => true,
+  'www.some-company.co.uk' => true,
+  'example.com.attacker.net' => true,
+  'notexample.com' => true,
+  'mytest' => true,
+  '' => true,
+}.each do |hostname, expected_forbidden|
+  actual_forbidden = !RESERVED_HOSTNAME.match?(hostname)
+  next if actual_forbidden == expected_forbidden
+  raise "reserved hostname control failed: #{hostname.inspect} " \
+        "expected forbidden=#{expected_forbidden}, got #{actual_forbidden}"
+end
 
 def public_account_addresses(text)
   text.scan(ADDRESS_SHAPE).reject { |address| RESERVED_ADDRESS.match?(address) }.uniq
@@ -506,6 +581,35 @@ def assert_network_contract(documents, suffix)
     policy.fetch('spec').fetch('egress', []).flat_map { |rule| rule.fetch('ports', []).map { |port| port['port'] } }
   end
   raise 'TCP 25 must not be allowed' if allowed_ports.include?(25)
+end
+
+# SITE_TEST_HOSTNAMES is a comma-separated list, and an empty declaration is a
+# list of nothing rather than a list containing one empty name — which is what
+# `readEnvList` in the storefront does with it too.
+def site_host_list(value)
+  value.to_s.split(',').map(&:strip).reject(&:empty?)
+end
+
+def site_base_url_host(site_hosts)
+  URI(site_hosts.fetch('SITE_BASE_URL')).host
+end
+
+# Every hostname this environment's storefront answers to, as far as a manifest
+# can know: the host of its base URL and its canonical host.
+#
+# Named separately because the rule below quantifies over this set, and the set
+# is not the same thing as the canonical host. The invariant is
+# *"SITE_TEST_HOSTNAMES contains every hostname the test storefront answers
+# to"*; the canonical host is one member of that set, never the rule itself.
+# `isTestHost(host, config)` matches the incoming request's `Host` header
+# against the list and never consults the canonical host — that is the separate
+# `isCanonicalHost`. The two coincide today only because the test storefront
+# answers to exactly one name. The day it answers to a second — a preview
+# hostname, a `www` form, a retired name still pointed at it — that name
+# belongs in this function *and* in the list, and a rule written as "the
+# canonical host is in the list" would have said nothing about it.
+def site_answered_hostnames(site_hosts)
+  [site_base_url_host(site_hosts), site_hosts.fetch('SITE_CANONICAL_HOST')].compact.uniq
 end
 
 def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, secrets:, pvc_sizes:, resources:,
@@ -854,6 +958,12 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
       entries = container.fetch('env', []).select { |entry| entry['name'] == variable }
       raise "#{where} must declare #{variable} exactly once" unless entries.length == 1
       entry = entries.first
+      # The `valueFrom` clause is retained redundancy and is named as such, so
+      # this file states one position rather than two. An entry delivered by
+      # reference has no `value` and is refused by the comparison beside it; an
+      # entry carrying both is refused by the API server before it can reach a
+      # pod. The site-host block below therefore writes the comparison alone,
+      # and that is not a disagreement with this line.
       raise "#{where} must declare #{variable} as an explicit empty value" unless
         entry['value'] == '' && !entry.key?('valueFrom')
     end
@@ -956,13 +1066,18 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # decision and as an omission. It also lets this contract require all three in
   # both environments, so the live/test difference is a *value* difference a
   # diff shows, never a presence difference a diff has to be read for.
-  storefront_container = pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}"))
-    .dig('containers', 0)
+  # Read across every container of the storefront pod, not container 0. The
+  # sibling newsletter guards above do the same, for the same reason: a
+  # sidecar's environment is as real as container 0's, and container 0 already
+  # carrying the expected value is exactly what would hide a second declaration.
+  storefront_containers = pod_containers(pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}")))
   site_hosts.each do |name, expected|
     # Every occurrence, not the first: Kubernetes accepts a duplicate name and
     # the later assignment wins, so a guard that stopped at the first match
     # would read a hostname the container never sees.
-    entries = storefront_container.fetch('env', []).select { |entry| entry['name'] == name }
+    entries = storefront_containers.flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == name }
+    end
     raise "storefront must declare #{name} exactly once" unless entries.length == 1
     # A literal, and never a reference. None of the three is a credential, and a
     # `valueFrom` would move the site's public identity out of the one place a
@@ -970,30 +1085,78 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     # because an entry delivered by reference carries no `value` at all and this
     # comparison refuses it on the spot — a `raise` for it could never be
     # reached, and an unreachable assertion is one a future edit deletes in
-    # silence.
-    raise "storefront #{name} mismatch" unless entries.first['value'] == expected
+    # silence. (The CORS block above keeps an explicit `valueFrom` clause beside
+    # the same kind of comparison. It is retained redundancy, not a contrary
+    # position: an entry carrying `value` *and* `valueFrom` is refused by the
+    # API server before it can reach a pod, so neither guard is what stands
+    # between this repository and that mistake.)
+    #
+    # Compared as a list rather than through `entries.first`, so that deleting
+    # the count assertion above leaves a clean refusal here instead of a
+    # `NoMethodError` on nil — a kill test should go red for the property it
+    # removed, not for the crash that followed it.
+    raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
   end
-  # Two properties are pinned by that equality rather than by assertions of
-  # their own, and are recorded here because the values alone do not explain
-  # themselves. Both are held by the table in `live_options` / `test_options`.
+
+  # Three properties of the option table itself, and the reason they are sited
+  # here rather than over the rendered values.
   #
-  # *The names are reserved.* `example.com` and `test.example.org` are RFC 2606
-  # names, exactly as every address in this repository is, for the reason
-  # RESERVED_EXAMPLE_DOMAINS states above: the real per-environment hostnames
-  # are injected from Orange and never rendered here.
+  # Everything above compares a rendered value to the table, which refuses an
+  # overlay that has drifted from the table and nothing else. It cannot refuse
+  # the edit that matters: change a value in the overlay and update the table in
+  # the same commit — which an exact-equality contract *forces* an editor to do
+  # — and both sides move together with the suite green. An assertion over a
+  # rendered value that the equality already refuses is decoration; the same
+  # assertion over the table constrains what a future editor may write in it.
+  # These three are therefore written over `site_hosts`, and their kill tests
+  # mutate the overlay and the table in lockstep, the way a real edit would.
+
+  # *Reserved names only.* Not an aesthetic rule: the real per-environment
+  # hostnames are injected from Orange and this repository is public. Applied to
+  # every hostname the table names, the members of the test-hostname list
+  # included, because a list is as good a place to put a real name as a scalar.
+  declared_site_hostnames =
+    [['SITE_BASE_URL', site_base_url_host(site_hosts)],
+     ['SITE_CANONICAL_HOST', site_hosts.fetch('SITE_CANONICAL_HOST')]] +
+    site_host_list(site_hosts.fetch('SITE_TEST_HOSTNAMES')).map { |host| ['SITE_TEST_HOSTNAMES', host] }
+  unreserved_site_hostnames = declared_site_hostnames
+    .reject { |_source, host| RESERVED_HOSTNAME.match?(host.to_s) }
+  raise "site hostnames must be reserved example names: #{unreserved_site_hostnames.inspect}" unless
+    unreserved_site_hostnames.empty?
+
+  # *The canonical host is the base URL's host.* hosts.ts derives the canonical
+  # host from the base URL when SITE_CANONICAL_HOST is absent, so two declared
+  # values that disagree are a state the application never produces on its own:
+  # canonical links pointing at one origin while requests are canonicalised to
+  # another.
+  raise "#{environment} canonical host must be the base URL's host" unless
+    site_hosts.fetch('SITE_CANONICAL_HOST') == site_base_url_host(site_hosts)
+
+  # *The `noindex` invariant.* SITE_TEST_HOSTNAMES must contain every hostname
+  # the test storefront answers to — see site_answered_hostnames for why that,
+  # and not "the canonical host is in the list", is the rule. A hostname the
+  # test environment serves and does not list is `isTestHost()` false for every
+  # request to it, which is `proxy.ts` sending no `X-Robots-Tag`, an allow-all
+  # `robots.txt`, `robots: {index: true}` in the page metadata, and analytics no
+  # longer suppressed. "The test environment is never indexed" is a stated
+  # completion criterion of this plan, and this is the only thing in this
+  # repository that holds it.
   #
-  # *The canonical host is the base URL's host, and in test it is also the one
-  # entry in the test-hostname list.* hosts.ts derives the canonical host from
-  # the base URL when SITE_CANONICAL_HOST is absent, so two declared values that
-  # disagree are a state the application never produces on its own — canonical
-  # links pointing at one origin while requests are canonicalised to another.
-  # And a test environment whose own hostname is missing from its list is the
-  # `noindex` failure this whole block exists for, so the two test values are
-  # deliberately the same string.
-  #
-  # Neither is a separate `raise`, because neither would be reachable: the
-  # equality above refuses any rendered value that violates them first, and an
-  # assertion no mutation can reach is one a future edit deletes silently.
+  # Live gets the mirror image rather than nothing. Its list is empty, and the
+  # failure that empty value exists to prevent is the opposite one: a live
+  # hostname that appears in it is a live site serving `noindex` to every
+  # crawler, silently, with every page still rendering perfectly.
+  answered_hostnames = site_answered_hostnames(site_hosts)
+  listed_test_hostnames = site_host_list(site_hosts.fetch('SITE_TEST_HOSTNAMES'))
+  if environment == 'test'
+    unlisted = answered_hostnames - listed_test_hostnames
+    raise "the test storefront answers to hostnames its test-hostname list omits: #{unlisted.inspect}" unless
+      unlisted.empty?
+  else
+    indexable_but_listed = answered_hostnames & listed_test_hostnames
+    raise "#{environment} declares a hostname it answers to unindexable: #{indexable_but_listed.inspect}" unless
+      indexable_but_listed.empty?
+  end
 
   # Only the storefront. These three configure the public site's identity, and
   # nothing else renders a canonical URL, a sitemap, or a `noindex`. A copy on
@@ -1018,8 +1181,12 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # — so ESO projected the credential correctly and every Store API call from
   # the storefront would still have failed. The aggregate Secret contract below
   # cannot see this: it compares Secret names and keys, and both were right.
-  publishable_entries = storefront_container.fetch('env', [])
-    .select { |entry| entry['name'].to_s.start_with?('MEDUSA_PUBLISHABLE') }
+  # Across every container of the pod, for the reason the site-host read above
+  # gives: a second declaration in a sidecar is invisible to a container-0 read,
+  # and this assertion exists precisely because the wrong *name* was the defect.
+  publishable_entries = storefront_containers.flat_map do |container|
+    container.fetch('env', []).select { |entry| entry['name'].to_s.start_with?('MEDUSA_PUBLISHABLE') }
+  end
   publishable_secret = environment == 'test' ? 'plepic-test-publishable-key' : 'plepic-publishable-key'
   raise 'storefront publishable-key variable contract mismatch' unless
     publishable_entries.map { |entry| [entry['name'], entry.dig('valueFrom', 'secretKeyRef')] } ==
@@ -1134,6 +1301,34 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
         !declared.include?('$(')
     end
   end
+
+  # The import's environment identity, which nothing supplied.
+  #
+  # `readCatalogueImportRuntimeConfig` requires CATALOGUE_IMPORT_ENVIRONMENT to
+  # be exactly `live` or `test` and raises the `expected-value-unset` refusal
+  # otherwise, so the Job as rendered could not have succeeded in either
+  # environment — it would have staged the archive, refused, disposed of it and
+  # exited non-zero. It is a per-environment literal with no privacy, credential
+  # or cross-repository dimension, exactly the class `DATABASE_NAME` already is,
+  # so it belongs here rather than in the deferred set. Its companion
+  # CATALOGUE_IMPORT_ARCHIVE_SHA256 does not: that is a per-archive value, and a
+  # placeholder for it would be a plausible-looking wrong digest.
+  #
+  # Asserted as the environment's own name, not merely as one of the two. The
+  # value's whole purpose is to refuse an archive recorded for the other
+  # environment, so `test` carrying `live` is the mistake worth catching, and it
+  # is the one a copied patch block produces.
+  import_environment_entries = pod_containers(pod_spec(import_job)).flat_map do |container|
+    container.fetch('env', []).select { |entry| entry['name'] == 'CATALOGUE_IMPORT_ENVIRONMENT' }
+  end
+  raise 'the catalogue import must declare CATALOGUE_IMPORT_ENVIRONMENT exactly once' unless
+    import_environment_entries.length == 1
+  # The declared values as a list, in the assertion and in its message, so that
+  # deleting the count assertion above leaves a clean refusal here rather than a
+  # `NoMethodError` on an empty list.
+  declared_import_environments = import_environment_entries.map { |entry| entry['value'] }
+  raise "catalogue import environment identity mismatch: #{declared_import_environments.inspect}" unless
+    declared_import_environments == [environment]
 
   # `envFrom` would deliver the same variable without ever appearing in `env`,
   # and a `secretRef` would additionally pull every key of a Secret into the pod
@@ -1353,6 +1548,34 @@ assert_mutation_rejected(
     [{ 'secretRef' => { 'name' => 'plepic-test-runtime-credentials' } }]
 end
 
+# The state the catalogue import shipped in: no environment identity at all.
+# Nothing else in the file reads the variable, and the application's refusal is
+# a Job exit nobody watches for a Job that is suspended by default.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the catalogue import missing its environment identity',
+  'the catalogue import must declare CATALOGUE_IMPORT_ENVIRONMENT exactly once'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env')
+    .reject! { |entry| entry['name'] == 'CATALOGUE_IMPORT_ENVIRONMENT' }
+end
+
+# The identity present, well formed, and belonging to the other environment —
+# what a copied patch block produces. The application would accept it and refuse
+# only on the archive's recorded identity, so the mistake surfaces as a refusal
+# about the archive rather than about the Job that is misconfigured.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the test catalogue import claiming the live environment identity',
+  'catalogue import environment identity mismatch'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env').each do |entry|
+    entry['value'] = 'live' if entry['name'] == 'CATALOGUE_IMPORT_ENVIRONMENT'
+  end
+end
+
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'a backend-image workload missing a CORS variable',
@@ -1491,6 +1714,33 @@ assert_mutation_rejected(
   end
 end
 
+# A Job with no REDIS_HOST at all. Before this variable joined the backend
+# image's required set, this state reached the Service-endpoint table and died
+# on `key not found: "REDIS_HOST"` — the suite went red, but for a lookup rather
+# than for the workload that is misconfigured. The mutation is the same; what it
+# is now refused by, and what it says, are what changed.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the migration Job missing the Redis host',
+  "plepic-predeploy-test/predeploy does not supply the backend image's required environment: REDIS_HOST"
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('env')
+    .reject! { |entry| entry['name'] == 'REDIS_HOST' }
+end
+
+# The port, on the other Job, so each of the two entries has a mutation of its
+# own and neither can be deleted from the list with the suite staying green.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the catalogue import missing the Redis port',
+  "plepic-catalogue-import-test/catalogue-import does not supply the backend image's required environment: REDIS_PORT"
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env')
+    .reject! { |entry| entry['name'] == 'REDIS_PORT' }
+end
+
 # REDIS_HOST declared and pointing somewhere real that is not Redis. Every
 # declaration check in this file is satisfied — the variable is present, it has
 # a literal value, and it names a Service this overlay renders — so only the
@@ -1603,6 +1853,173 @@ assert_mutation_rejected(
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env') <<
     { 'name' => 'SITE_BASE_URL', 'value' => 'https://test.example.org' }
+end
+
+# ---------------------------------------------------------------------------
+# The site's host configuration, one level up: the option table.
+#
+# Every mutation above rewrites a rendered document and hands it to an unchanged
+# option table, so all of them are refused by the exact value comparison. That
+# comparison cannot reach the edit these next four are about. Changing a value
+# in the overlay *forces* the table to be updated in the same commit, and an
+# editor who does both moves the contract with them — which is how a test
+# environment could be pointed at a hostname it does not serve `noindex` on, and
+# how a real hostname could enter this public repository, with the suite green
+# in both cases. Both were executed against this file before these existed.
+#
+# So this harness mutates the rendered documents and the options together, the
+# way that commit would, and the assertions it exercises are the ones written
+# over the table rather than over the rendered value.
+# ---------------------------------------------------------------------------
+def assert_lockstep_mutation_rejected(source_path, options, description, expected_error)
+  documents = YAML.load_stream(File.read(source_path)).compact
+  # A deep copy, so a mutation cannot leak into the options every later
+  # assertion in this file is still using.
+  mutated_options = Marshal.load(Marshal.dump(options))
+  yield documents, mutated_options
+  Tempfile.create(['plepic-manifest-lockstep', '.yaml']) do |temporary|
+    temporary.write(YAML.dump_stream(*documents))
+    temporary.flush
+    begin
+      assert_manifest(temporary.path, **mutated_options)
+    rescue StandardError => error
+      raise "#{description} failed for the wrong reason: #{error.message}" unless error.message.include?(expected_error)
+      return
+    end
+  end
+  raise "positive control was accepted: #{description}"
+end
+
+# Rewrites one site-host variable on the rendered storefront, so a lockstep
+# mutation reads as the pair of edits it is: this line and the table line.
+def set_rendered_site_host(documents, workload_name, name, value)
+  storefront = resource(documents, 'Deployment', workload_name)
+  entries = pod_spec(storefront).fetch('containers').first.fetch('env')
+    .select { |entry| entry['name'] == name }
+  raise "the mutation targets #{name}, which the rendered storefront does not declare" if entries.empty?
+  entries.each { |entry| entry['value'] = value }
+end
+
+# The `noindex` regression as an editor would actually commit it: the test
+# environment's list points at a hostname it does not answer to, and the table
+# says so too. Executed against the previous version of this file — `exit=0`,
+# "Plepic manifest contract tests passed", test environment serving no
+# `X-Robots-Tag`, an allow-all robots.txt, `index: true` metadata and live
+# analytics.
+assert_lockstep_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a test-hostname list that omits the hostname the test storefront answers to',
+  'the test storefront answers to hostnames its test-hostname list omits'
+) do |documents, options|
+  options.fetch(:site_hosts)['SITE_TEST_HOSTNAMES'] = 'staging.example.org'
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_TEST_HOSTNAMES', 'staging.example.org')
+end
+
+# The mirror, on live, and the reason the empty live value is asserted rather
+# than merely explained: a live hostname listed here is a live site telling
+# every crawler not to index it, while every page still renders perfectly.
+assert_lockstep_mutation_rejected(
+  ARGV.fetch(0), live_options,
+  'live declaring the hostname it serves unindexable',
+  'live declares a hostname it answers to unindexable'
+) do |documents, options|
+  options.fetch(:site_hosts)['SITE_TEST_HOSTNAMES'] = 'example.com'
+  set_rendered_site_host(documents, 'plepic-storefront', 'SITE_TEST_HOSTNAMES', 'example.com')
+end
+
+# A real-looking hostname entering a public repository, in lockstep. The name
+# below is invented rather than anyone's, for the same reason the address
+# controls near the top of this file use invented domains.
+#
+# Also executed against the previous version of this file, with the actual
+# target hostname of this plan, and accepted: `exit=0`. The reserved-name
+# exemption did not cover this and never reached it — RESERVED_ADDRESS requires
+# a `local-part@`, so no bare hostname is ever tested against it.
+assert_lockstep_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the site identity moved to a hostname that is not reserved',
+  'site hostnames must be reserved example names'
+) do |documents, options|
+  hostname = 'test.merchant-domain.com'
+  options.fetch(:site_hosts)['SITE_BASE_URL'] = "https://#{hostname}"
+  options.fetch(:site_hosts)['SITE_CANONICAL_HOST'] = hostname
+  options.fetch(:site_hosts)['SITE_TEST_HOSTNAMES'] = hostname
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_BASE_URL', "https://#{hostname}")
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_CANONICAL_HOST', hostname)
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_TEST_HOSTNAMES', hostname)
+end
+
+# Canonical links pointing at one origin while requests canonicalise to another.
+# The new canonical host is added to the test-hostname list as well, so the
+# `noindex` invariant above is satisfied and this mutation reaches the one
+# assertion it is written for.
+assert_lockstep_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a canonical host that is not the base URL host',
+  "canonical host must be the base URL's host"
+) do |documents, options|
+  options.fetch(:site_hosts)['SITE_CANONICAL_HOST'] = 'other.example.org'
+  options.fetch(:site_hosts)['SITE_TEST_HOSTNAMES'] = 'test.example.org,other.example.org'
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_CANONICAL_HOST', 'other.example.org')
+  set_rendered_site_host(documents, 'plepic-storefront-test', 'SITE_TEST_HOSTNAMES',
+                         'test.example.org,other.example.org')
+end
+
+# A second base URL in a sidecar of the storefront pod. Container 0 still
+# carries the expected value, so a guard that read only container 0 saw nothing
+# — which is what the storefront assertions used to do and the sibling
+# newsletter guards deliberately do not. The sidecar is hardened, resourced and
+# digest pinned so the mutation reaches the site-host block rather than dying in
+# pod hardening, and it runs an image no census counts.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a storefront sidecar declaring a second base URL',
+  'storefront must declare SITE_BASE_URL exactly once'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers') << {
+    'name' => 'edge-sidecar',
+    'image' => "postgres:17.10-bookworm@sha256:#{'4b7d' * 16}",
+    'env' => [{ 'name' => 'SITE_BASE_URL', 'value' => 'https://other.example.org' }],
+    'securityContext' => {
+      'allowPrivilegeEscalation' => false,
+      'capabilities' => { 'drop' => ['ALL'] },
+      'readOnlyRootFilesystem' => true,
+    },
+    'resources' => {
+      'requests' => { 'cpu' => '100m', 'memory' => '128Mi' },
+      'limits' => { 'cpu' => '500m', 'memory' => '512Mi' },
+    },
+  }
+end
+
+# The same blind spot on the other container-0 read: the publishable key back
+# under the name the storefront does not read, in a sidecar. The Secret and key
+# are ones this overlay already projects, so the aggregate Secret contract sees
+# nothing new.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a storefront sidecar re-declaring the publishable key under the old name',
+  'storefront publishable-key variable contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers') << {
+    'name' => 'edge-sidecar',
+    'image' => "postgres:17.10-bookworm@sha256:#{'4b7d' * 16}",
+    'env' => [{
+      'name' => 'MEDUSA_PUBLISHABLE_KEY',
+      'valueFrom' => { 'secretKeyRef' => { 'name' => 'plepic-test-publishable-key', 'key' => 'publishableKey' } },
+    }],
+    'securityContext' => {
+      'allowPrivilegeEscalation' => false,
+      'capabilities' => { 'drop' => ['ALL'] },
+      'readOnlyRootFilesystem' => true,
+    },
+    'resources' => {
+      'requests' => { 'cpu' => '100m', 'memory' => '128Mi' },
+      'limits' => { 'cpu' => '500m', 'memory' => '512Mi' },
+    },
+  }
 end
 
 # The publishable key under the name these manifests used to give it. The Secret
