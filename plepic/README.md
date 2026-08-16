@@ -51,11 +51,62 @@ authenticated Redis. The key is global: no address, IP, Turnstile token, or
 other subscriber-derived value is stored in Redis.
 
 Both overlays intentionally begin with the all-zero SHA-256 sentinel for the
-backend and storefront images. The sentinel is not deployable. After this
-bootstrap commit, image digest lines are promotion state owned only by the
-Plepic repository's reviewed `scripts/update-gitops-digest.sh`: test promotion
-updates only `overlays/test`, and release promotion updates only
+backend and storefront images. It names an image that was never built, so the
+sentinel is not deployable in the only sense this repository can guarantee: a
+workload that reaches a cluster on it fails to pull rather than running some
+wrong version.
+
+Refusing the sentinel *before* an Application is applied is a deployment-time
+control, and it does not live here. Servitium is the precedent and splits it the
+same way: its manifest contract requires a 64-hex digest and therefore accepts
+the all-zero sentinel exactly as this contract does, while the refusal itself
+sits in Orange, in `roles/argocd/tasks/servitium.yml`, which fetches each
+overlay's `kustomization.yaml` and rejects the sentinel when the rendered
+Applications differ. Accepting both shapes here is that precedent, not a
+relaxation of it. The Orange half does not exist for Plepic yet — no
+`roles/argocd/tasks/plepic.yml`, no Plepic sentinel variable — and writing it is
+a Task 6 checkbox. Until then the sentinel's only backstop is the missing image.
+
+After this bootstrap commit, image digest lines are promotion state owned only by
+the Plepic repository's reviewed `scripts/update-gitops-digest.sh`: test
+promotion updates only `overlays/test`, and release promotion updates only
 `overlays/live`. Do not edit those digest lines by hand.
+
+Because that script rewrites a literal `name` / `newName` / `digest` block, the
+contract here requires each overlay image entry to carry those three keys and
+nothing else. An entry with an extra key can still render and pin correctly — a
+`newTag` beside a digest resolves to the digest — but the next promotion into
+that overlay would be refused, so it is caught here instead of at the release
+that needs it.
+
+The manifest contract therefore asserts a digest *shape*, not a digest value:
+every container image in both rendered overlays must carry an
+`@sha256:<64 hex>` digest, and the bootstrap sentinel and a promoted digest are
+equally valid. That is deliberate. The two overlays are promoted independently —
+test on a `deploy-test` label, live on merge to `main` — so between a test
+promotion and the release that follows it, one overlay legitimately carries a
+real digest while the other is still on the sentinel. An assertion pinned to the
+sentinel would have made promotion and the contract mutually exclusive, and did:
+the first test promotion was refused by this repository rather than by anything
+wrong with the manifests. No image assertion — the digest requirement, the
+census, or the per-repository digest uniformity — knows or asks which
+environment it is inspecting. The contract as a whole does branch on
+environment, for the name suffix, the Secret references and the merchant
+values; nothing concerning image pinning does, which is what lets the two
+overlays be promoted independently.
+
+Alongside the digest requirement the contract holds a container census — four
+containers run the backend image and one runs the storefront image, counted by
+image repository so a container naming an application image by tag is counted
+rather than invisible. Digest pinning and the census are independent: a fifth
+correctly pinned container is refused by the census, and an unpinned container
+is refused whether or not the census is right.
+
+The contract also requires the containers running one application image to agree
+on one digest, so a lifecycle Job cannot run a different backend build than the
+backend it prepares. Sentinel equality forced that implicitly and a per-container
+shape requirement does not, so it is asserted directly. It compares the digests
+to each other and never to a fixed value, which is why it survives promotion.
 
 Runtime, database-administrator, and Medusa publishable-key Secrets are
 projected by External Secrets and are not rendered here. The publishable key is
@@ -79,6 +130,7 @@ kubectl kustomize plepic/overlays/test >/dev/null
 ```
 
 The manifest contract checks isolation, hardening, ordered Argo CD Sync waves,
-network boundaries, Secret names and keys, sentinel images, and the exact
-external ports. These manifests describe desired state only; their presence in
-this repository does not claim that either environment has been deployed.
+network boundaries, Secret names and keys, digest-pinned images and their
+census, and the exact external ports. These manifests describe desired state
+only; their presence in this repository does not claim that either environment
+has been deployed.
