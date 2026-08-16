@@ -1172,6 +1172,48 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     "plepic-storefront#{suffix}" => site_host_names.sort,
   }
 
+  # Analytics identity is *forbidden here*, in both environments. That is a
+  # different rule from every placeholder above rather than a stricter one: the
+  # site hosts are values this repository carries in reserved form and Orange
+  # replaces, and this one is a value this repository must not carry in any
+  # form.
+  #
+  # `ANALYTICS_MEASUREMENT_ID` is the single variable the storefront reads for
+  # it — `storefront/src/config/runtime-config.ts` resolves it to `null` when
+  # absent, and `ConsentManager` never mounts the loader on a null measurement
+  # ID — so presence is the whole property and there is nothing else to name.
+  #
+  # One tracked line declaring it in `base/` breaks two Global Constraints at
+  # once, and did: executed against the previous version of this file it gave
+  # `exit=0` and "Plepic manifest contract tests passed", with a GA4 identifier
+  # rendered into *both* overlays. It is an account identifier in a public
+  # repository, and — because the base is shared — analytics reaching the test
+  # environment, which the plan says has no analytics at all.
+  #
+  # Nothing else in this file could see it, which is why the rule is written
+  # rather than assumed. The whole-file address scan needs a `local-part@`, so a
+  # bare measurement ID never enters ADDRESS_SHAPE; the reserved-name boundary
+  # is applied to the three SITE_* hostnames and a GA4 ID is not a hostname; and
+  # there is no shape a measurement ID could fail, because it is an opaque
+  # account identifier rather than a structured name.
+  #
+  # A presence ban rather than a placeholder, and it costs Task 6 nothing.
+  # Absence is the *correct* configuration for test, so there is nothing there
+  # to placehold. There is no reserved-example GA4 ID the way there is a
+  # reserved example domain, so a placeholder would be a real-looking fake in a
+  # public repository bought for no gain. And live's real value is delivered as
+  # an Ansible-rendered patch on the Argo CD Application, which never enters
+  # this repository at all — see "What Task 6 must inject" in the README.
+  #
+  # Presence, not value, so an ID arriving by `valueFrom` is refused too: ESO is
+  # the wrong path for a non-credential, and the README says so.
+  analytics_identity_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    workload.dig('metadata', 'name') if env_present?(containers, 'ANALYTICS_MEASUREMENT_ID')
+  end.sort
+  raise "analytics identity must never be tracked here: #{analytics_identity_consumers.inspect}" unless
+    analytics_identity_consumers.empty?
+
   # The Medusa publishable key, by the name the storefront actually reads.
   #
   # `storefront/src/config/runtime-env.ts` lists MEDUSA_PUBLISHABLE_API_KEY, and
@@ -1853,6 +1895,31 @@ assert_mutation_rejected(
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env') <<
     { 'name' => 'SITE_BASE_URL', 'value' => 'https://test.example.org' }
+end
+
+# The one line that breaks two Global Constraints at once, in the form it would
+# actually be committed. Executed against the previous version of this file, as
+# a single `- {name: ANALYTICS_MEASUREMENT_ID, value: ...}` entry in
+# `base/storefront.yaml`: `exit=0`, "Plepic manifest contract tests passed", and
+# the identifier rendered into *both* overlays — an account identifier in a
+# public repository, and analytics reaching the environment the plan says has
+# none.
+#
+# Written on live because that is the environment with a real value to be
+# tempted by; the base is shared, so the committed form of this mistake fails
+# here and on test alike, and the assertion branches on neither.
+#
+# The identifier is self-describing rather than plausible. The rule is presence,
+# so the value cannot be what makes this mutation fail, and there is no
+# reserved-example GA4 ID that would let a realistic one be safe.
+assert_mutation_rejected(
+  ARGV.fetch(0), live_options,
+  'a GA4 measurement ID declared in the tracked manifests',
+  'analytics identity must never be tracked here'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront')
+  pod_spec(storefront).fetch('containers').first.fetch('env') <<
+    { 'name' => 'ANALYTICS_MEASUREMENT_ID', 'value' => 'G-EXAMPLE000' }
 end
 
 # ---------------------------------------------------------------------------
