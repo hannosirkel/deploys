@@ -503,9 +503,19 @@ def assert_network_contract(documents, suffix)
   raise 'TCP 25 must not be allowed' if allowed_ports.include?(25)
 end
 
-def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, secrets:, pvc_sizes:, resources:)
+def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, secrets:, pvc_sizes:, resources:,
+                    overlay_path: nil)
   documents = YAML.load_stream(File.read(path)).compact
-  overlay = YAML.load_file("plepic/overlays/#{environment}/kustomization.yaml")
+  # The overlay is read from disk rather than recovered from the rendered
+  # documents, because what the assertions just below check is the source the
+  # digest lines get written into, not the result of applying them.
+  #
+  # overlay_path exists only so a mutation can reach those assertions at all.
+  # The mutation harness rewrites rendered documents, and no rewriting of a
+  # rendered document can change what this line loads, which is exactly how the
+  # overlay digest assertion ended up as the one guard in this change with no
+  # kill test behind it. Production callers pass nothing and get the real file.
+  overlay = YAML.load_file(overlay_path || "plepic/overlays/#{environment}/kustomization.yaml")
   raise 'overlay may source only the shared base' unless overlay['resources'] == ['../../base']
   expected_name_suffix = environment == 'test' ? '-test' : nil
   raise 'overlay name suffix mismatch' unless overlay['nameSuffix'] == expected_name_suffix
@@ -518,6 +528,21 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # this refuses the same mistake at the source it would be written into.
   raise 'overlay images must be pinned by digest' unless
     overlay.fetch('images').all? { |image| image['digest'].to_s.match?(DIGEST_SHAPE) }
+  # And nothing else in the entry. `scripts/update-gitops-digest.sh` in the
+  # Plepic repository rewrites these lines by matching a literal three-line block
+  # — `name`, `newName`, `digest` — and refuses the whole file if it cannot find
+  # exactly one such block per image.
+  #
+  # An extra key is therefore not a rendering problem. A `newTag` beside a digest
+  # renders `…:latest@sha256:…`, which pins correctly, because the digest is what
+  # the runtime resolves and the tag is ignored. It is a *promotion* problem: the
+  # overlay would still deploy the right image and the next promotion into it
+  # would be refused. That is the same shape of defect as the sentinel assertions
+  # this file replaced — a contract here agreeing to an overlay the promotion
+  # path cannot write to — so it is refused here rather than discovered in CI at
+  # the next release.
+  raise 'overlay image entries must carry only name, newName and digest' unless
+    overlay.fetch('images').all? { |image| image.keys.sort == %w[digest name newName] }
   raise 'Namespace resources are owned by Orange' if documents.any? { |document| document['kind'] == 'Namespace' }
   raise 'Ingress is forbidden' if documents.any? { |document| document['kind'] == 'Ingress' }
   raise 'Role and RoleBinding are forbidden' if documents.any? { |document| %w[Role RoleBinding ClusterRole ClusterRoleBinding].include?(document['kind']) }
@@ -655,6 +680,30 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     .tally.select { |repository, _count| repository.start_with?(APPLICATION_IMAGE_PREFIX) }
   raise "application image census mismatch: #{application_image_census.inspect}" unless
     application_image_census == { BACKEND_IMAGE => 4, STOREFRONT_IMAGE => 1 }
+
+  # One digest per application repository, across the whole overlay.
+  #
+  # The sentinel equality this file replaced forced this implicitly — every
+  # backend container had to carry one identical value — and a shape requirement
+  # on each container separately does not. The class it bounds is a migration or
+  # catalogue-import Job running a different backend build than the backend it
+  # prepares, which is what the Sync waves exist to order and which four
+  # independently well-formed digests would otherwise satisfy.
+  #
+  # Value-relative, not value-fixed: it says the digests agree, never which
+  # digest they agree on, so it survives every promotion untouched and still asks
+  # nothing about which environment it is reading. It is unreachable through the
+  # supported path today, because kustomize's `images:` transformer runs after
+  # patches and rewrites every matching reference to the one declared digest; it
+  # is held against the rendering path changing, and the mutation below is what
+  # stops it becoming decorative.
+  application_digests = named_containers
+    .map { |_name, container| [image_repository(container['image']), container['image'].to_s.split('@', 2)[1]] }
+    .select { |repository, _digest| repository.start_with?(APPLICATION_IMAGE_PREFIX) }
+    .group_by(&:first)
+    .transform_values { |pairs| pairs.map(&:last).uniq }
+  divergent = application_digests.select { |_repository, digests| digests.length > 1 }
+  raise "application image digests diverge: #{divergent.inspect}" unless divergent.empty?
 
   pvc_sizes.each do |name, size|
     pvc = resource(documents, 'PersistentVolumeClaim', "plepic-#{name}#{suffix}")
@@ -1355,6 +1404,94 @@ assert_mutation_rejected(
     'securityContext' => HARDENED_SIDECAR_SECURITY.dup,
     'resources' => HARDENED_SIDECAR_RESOURCES.dup,
   }
+end
+
+# Two backend containers on two different, individually valid digests — the
+# worker running a build the backend it works alongside is not. Nothing earlier
+# objects: both references are correctly pinned, the census still tallies four
+# backend containers and one storefront, the workload set is untouched, and every
+# environment contract still holds. Only the uniformity assertion refuses it,
+# which is what keeps that assertion load-bearing rather than ornamental.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'backend-image containers split across two different digests',
+  'application image digests diverge'
+) do |documents|
+  worker = pod_spec(resource(documents, 'Deployment', 'plepic-worker-test')).fetch('containers').first
+  worker['image'] = "#{BACKEND_IMAGE}@#{PLAUSIBLE_DIGEST}"
+end
+
+# The overlay-level counterpart of assert_mutation_rejected, and the reason
+# there has to be one.
+#
+# assert_mutation_rejected rewrites *rendered documents*. The overlay assertions
+# near the top of assert_manifest re-read the kustomization from disk, so no
+# document mutation can reach them, and the overlay digest assertion was
+# consequently the only guard added by this change that could be deleted outright
+# with the suite staying green. This harness mutates the overlay instead and
+# hands assert_manifest the unmodified rendered documents alongside it.
+#
+# The pairing fakes nothing. No assertion ties a rendered image to the digest the
+# overlay declares — see the uniformity note in assert_manifest for why that tie
+# is deliberately absent — so a mutated overlay next to untouched rendered
+# documents is not an input the contract considers inconsistent.
+def assert_overlay_mutation_rejected(rendered_path, options, description, expected_error)
+  overlay = YAML.load_file("plepic/overlays/#{options.fetch(:environment)}/kustomization.yaml")
+  yield overlay
+  Tempfile.create(['plepic-overlay-mutation', '.yaml']) do |temporary|
+    temporary.write(YAML.dump(overlay))
+    temporary.flush
+    begin
+      assert_manifest(rendered_path, **options, overlay_path: temporary.path)
+    rescue StandardError => error
+      raise "#{description} failed for the wrong reason: #{error.message}" unless error.message.include?(expected_error)
+      return
+    end
+  end
+  raise "positive control was accepted: #{description}"
+end
+
+# A tag where the digest belongs. This is the shape a hand edit produces, and
+# the one `scripts/update-gitops-digest.sh` owning these lines exists to keep
+# anyone from writing.
+#
+# Losing the digest key also violates the entry shape, so this case is covered
+# twice and the message below names whichever assertion is reached first. The
+# malformed-digest mutation after it is the one that isolates the digest
+# requirement, keeping all three keys and failing only the shape.
+assert_overlay_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'an overlay image entry pinned by tag instead of digest',
+  'overlay images must be pinned by digest'
+) do |overlay|
+  entry = overlay.fetch('images').find { |image| image['name'] == BACKEND_IMAGE }
+  entry.delete('digest')
+  entry['newTag'] = 'latest'
+end
+
+# A truncated digest at the source: the overlay-level twin of the malformed
+# rendered digest above, and the case that separates this assertion from one
+# written as "has a digest key".
+assert_overlay_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'an overlay image entry pinned to a malformed digest',
+  'overlay images must be pinned by digest'
+) do |overlay|
+  overlay.fetch('images').first['digest'] = "sha256:#{'0' * 63}"
+end
+
+# A tag *alongside* a valid digest. Everything about the deployed result stays
+# correct — the entry renders `…:latest@sha256:…` and the digest is what pins —
+# so the digest assertion is satisfied and only the entry-shape assertion
+# objects. It is refused because the promotion script cannot rewrite an entry it
+# cannot pattern-match, which would leave this overlay deploying correctly and
+# unable to be promoted again.
+assert_overlay_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'an overlay image entry carrying a tag alongside its digest',
+  'overlay image entries must carry only name, newName and digest'
+) do |overlay|
+  overlay.fetch('images').first['newTag'] = 'latest'
 end
 
 # The acceptance half, and the reason this file can be trusted not to be sentinel

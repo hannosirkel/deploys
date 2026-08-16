@@ -72,6 +72,13 @@ the Plepic repository's reviewed `scripts/update-gitops-digest.sh`: test
 promotion updates only `overlays/test`, and release promotion updates only
 `overlays/live`. Do not edit those digest lines by hand.
 
+Because that script rewrites a literal `name` / `newName` / `digest` block, the
+contract here requires each overlay image entry to carry those three keys and
+nothing else. An entry with an extra key can still render and pin correctly — a
+`newTag` beside a digest resolves to the digest — but the next promotion into
+that overlay would be refused, so it is caught here instead of at the release
+that needs it.
+
 The manifest contract therefore asserts a digest *shape*, not a digest value:
 every container image in both rendered overlays must carry an
 `@sha256:<64 hex>` digest, and the bootstrap sentinel and a promoted digest are
@@ -81,11 +88,12 @@ promotion and the release that follows it, one overlay legitimately carries a
 real digest while the other is still on the sentinel. An assertion pinned to the
 sentinel would have made promotion and the contract mutually exclusive, and did:
 the first test promotion was refused by this repository rather than by anything
-wrong with the manifests. No image assertion — the digest requirement or the
-census — knows or asks which environment it is inspecting. The contract as a
-whole does branch on environment, for the name suffix, the Secret references
-and the merchant values; nothing concerning image pinning does, which is what
-lets the two overlays be promoted independently.
+wrong with the manifests. No image assertion — the digest requirement, the
+census, or the per-repository digest uniformity — knows or asks which
+environment it is inspecting. The contract as a whole does branch on
+environment, for the name suffix, the Secret references and the merchant
+values; nothing concerning image pinning does, which is what lets the two
+overlays be promoted independently.
 
 Alongside the digest requirement the contract holds a container census — four
 containers run the backend image and one runs the storefront image, counted by
@@ -93,6 +101,12 @@ image repository so a container naming an application image by tag is counted
 rather than invisible. Digest pinning and the census are independent: a fifth
 correctly pinned container is refused by the census, and an unpinned container
 is refused whether or not the census is right.
+
+The contract also requires the containers running one application image to agree
+on one digest, so a lifecycle Job cannot run a different backend build than the
+backend it prepares. Sentinel equality forced that implicitly and a per-container
+shape requirement does not, so it is asserted directly. It compares the digests
+to each other and never to a fixed value, which is why it survives promotion.
 
 Runtime, database-administrator, and Medusa publishable-key Secrets are
 projected by External Secrets and are not rendered here. The publishable key is
