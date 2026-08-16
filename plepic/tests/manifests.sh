@@ -28,8 +28,11 @@ ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" <<'RUBY'
 #
 # Two consequences are the point rather than a side effect. A promoted overlay
 # and an unpromoted one are the same shape here, so the environment that is
-# behind does not break the moment the other moves ahead — no assertion below
-# knows or asks which environment it is looking at. And because the property is
+# behind does not break the moment the other moves ahead — no *image* assertion
+# below knows or asks which environment it is looking at. (assert_manifest does
+# branch on environment, for the name suffix, the Secret references and the
+# merchant values; none of that reaches image pinning, which is the property
+# that has to hold across a promotion.) And because the requirement is
 # structural, no future promotion touches this file at all.
 DIGEST_SHAPE = /\Asha256:[0-9a-f]{64}\z/.freeze
 
@@ -734,8 +737,13 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # not by the digest form. The question this answers is "does everything
   # running the backend image supply what that image requires", so anything that
   # acquires the image later — a second Job, a sidecar, a debug ephemeral
-  # container, by tag or by digest — is inside the guard the moment it appears,
-  # rather than the moment someone remembers to add it.
+  # container — is inside the guard the moment it appears, rather than the moment
+  # someone remembers to add it.
+  #
+  # The reducer still accepts a tag-form reference, but nothing can reach this
+  # point carrying one: the digest requirement above refuses an unpinned image
+  # before the environment contract is ever consulted. That is deliberate
+  # redundancy in the selector, not coverage this assertion still provides.
   backend_image_containers = documents.flat_map do |document|
     next [] unless (pod = pod_spec(document))
     pod_containers(pod)

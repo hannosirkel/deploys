@@ -51,11 +51,25 @@ authenticated Redis. The key is global: no address, IP, Turnstile token, or
 other subscriber-derived value is stored in Redis.
 
 Both overlays intentionally begin with the all-zero SHA-256 sentinel for the
-backend and storefront images. The sentinel is not deployable, and Orange
-refuses it at reconciliation time, before either Application is applied. After
-this bootstrap commit, image digest lines are promotion state owned only by the
-Plepic repository's reviewed `scripts/update-gitops-digest.sh`: test promotion
-updates only `overlays/test`, and release promotion updates only
+backend and storefront images. It names an image that was never built, so the
+sentinel is not deployable in the only sense this repository can guarantee: a
+workload that reaches a cluster on it fails to pull rather than running some
+wrong version.
+
+Refusing the sentinel *before* an Application is applied is a deployment-time
+control, and it does not live here. Servitium is the precedent and splits it the
+same way: its manifest contract requires a 64-hex digest and therefore accepts
+the all-zero sentinel exactly as this contract does, while the refusal itself
+sits in Orange, in `roles/argocd/tasks/servitium.yml`, which fetches each
+overlay's `kustomization.yaml` and rejects the sentinel when the rendered
+Applications differ. Accepting both shapes here is that precedent, not a
+relaxation of it. The Orange half does not exist for Plepic yet — no
+`roles/argocd/tasks/plepic.yml`, no Plepic sentinel variable — and writing it is
+a Task 6 checkbox. Until then the sentinel's only backstop is the missing image.
+
+After this bootstrap commit, image digest lines are promotion state owned only by
+the Plepic repository's reviewed `scripts/update-gitops-digest.sh`: test
+promotion updates only `overlays/test`, and release promotion updates only
 `overlays/live`. Do not edit those digest lines by hand.
 
 The manifest contract therefore asserts a digest *shape*, not a digest value:
@@ -67,8 +81,11 @@ promotion and the release that follows it, one overlay legitimately carries a
 real digest while the other is still on the sentinel. An assertion pinned to the
 sentinel would have made promotion and the contract mutually exclusive, and did:
 the first test promotion was refused by this repository rather than by anything
-wrong with the manifests. Nothing in the contract knows which environment it is
-inspecting.
+wrong with the manifests. No image assertion — the digest requirement or the
+census — knows or asks which environment it is inspecting. The contract as a
+whole does branch on environment, for the name suffix, the Secret references
+and the merchant values; nothing concerning image pinning does, which is what
+lets the two overlays be promoted independently.
 
 Alongside the digest requirement the contract holds a container census — four
 containers run the backend image and one runs the storefront image, counted by
