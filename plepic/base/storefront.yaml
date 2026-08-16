@@ -33,12 +33,45 @@ spec:
             - {name: http, containerPort: 3000, protocol: TCP}
           env:
             - {name: NODE_ENV, value: production}
+            # The site's own identity, and reserved placeholders for all three.
+            #
+            # `storefront/src/config/hosts.ts` reads these and falls back to
+            # `https://example.com` when SITE_BASE_URL is absent, so an
+            # unconfigured deployment does not fail — it silently emits
+            # example.com as every canonical URL, `og:url`, sitemap entry and
+            # `hreflang` alternate, and `isTestHost()` answers false for every
+            # request, which is how a test environment ships without `noindex`.
+            # Declaring all three is what makes an overlay that drops one a
+            # contract failure instead of that.
+            #
+            # The values are RFC 2606 reserved names, exactly as every address
+            # in this repository is: the real per-environment hostnames are
+            # injected from Orange and never rendered here.
+            - {name: SITE_BASE_URL, value: "https://example.com"}
+            - {name: SITE_CANONICAL_HOST, value: example.com}
+            # Empty on purpose, and declared rather than omitted — the same
+            # reasoning as the three CORS variables in backend.yaml. Live has no
+            # unindexed hostname, and `readEnvList` treats an empty value and an
+            # absent one identically, so the only difference declaring it makes
+            # is to a reader: "live indexes everything" is then a stated
+            # decision rather than an omission nobody can date. The test overlay
+            # replaces this with its own hostname; that asymmetry is a value
+            # difference visible in a diff, not a presence difference.
+            - {name: SITE_TEST_HOSTNAMES, value: ""}
             - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:9000"}
             - {name: MERCHANT_LEGAL_NAME, value: "Example Games OÜ"}
             - {name: MERCHANT_REGISTERED_ADDRESS, value: "Example Street 1, Tallinn"}
             - {name: MERCHANT_CONTACT_ADDRESS, value: legal@example.com}
             - {name: MERCHANT_RETURN_ADDRESS, value: "Return Street 2, Tallinn"}
-            - name: MEDUSA_PUBLISHABLE_KEY
+            # MEDUSA_PUBLISHABLE_API_KEY, not MEDUSA_PUBLISHABLE_KEY. The
+            # storefront reads the former —
+            # `storefront/src/config/runtime-env.ts`'s RUNTIME_ENV_VARS,
+            # `runtime-config.ts`, and `lib/medusa-client.ts`, which throws
+            # `MEDUSA_PUBLISHABLE_API_KEY is required for Store API requests`.
+            # The Secret name and key are unchanged; only this manifest's
+            # variable name was wrong, and every Store API call would have
+            # failed on it.
+            - name: MEDUSA_PUBLISHABLE_API_KEY
               valueFrom: {secretKeyRef: {name: plepic-publishable-key, key: publishableKey}}
             - name: STRIPE_PUBLISHABLE_KEY
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}

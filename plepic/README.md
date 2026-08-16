@@ -43,6 +43,48 @@ running the backend image; that list is declared in `tests/manifests.sh` and
 names its source, because the image's repository is not readable at validation
 time.
 
+`REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` reach **all four** backend-image
+workloads, the two lifecycle Jobs included, and `allow-redis-ingress` and
+`allow-redis-egress` admit all four. The Jobs are not an exception: `medusa exec`
+boots the whole module container — `skipLoadingEntryPoints` skips routes and
+subscribers, not modules — so the Redis event bus and workflow engine open a
+connection at module load in a Job exactly as they do in a Deployment. A Job
+without them does not quietly fall back to an in-process bus; it retries
+forever, and for the predeploy Job that is a Sync hook that never completes and
+a sync gate that blocks every wave behind it. No `REDIS_URL` is supplied here:
+the three parts are what these manifests project and the application composes
+the URL, the same split as the five `DATABASE_*` parts.
+
+`SITE_BASE_URL`, `SITE_CANONICAL_HOST`, and `SITE_TEST_HOSTNAMES` are declared on
+the storefront in both environments with reserved-name placeholders, and the real
+per-environment hostnames are injected from Orange. They are declared rather than
+left to the application's defaults because those defaults do not fail:
+`storefront/src/config/hosts.ts` falls back to `https://example.com` and to an
+empty test-hostname list, so an unconfigured storefront starts and serves while
+emitting `example.com` as every canonical URL, `og:url`, sitemap entry and
+`hreflang` alternate, and while `isTestHost()` answers false for every request —
+which is how a test environment ships without `noindex`.
+
+Live declares `SITE_TEST_HOSTNAMES` **empty** rather than omitting it, on the
+same reasoning as the three CORS variables: `readEnvList` cannot tell an empty
+value from an absent one, so the declaration costs nothing at runtime and buys
+the reviewer the difference between "live has no unindexed hostname" as a stated
+decision and as an omission nobody can date. It also lets the contract require
+all three in both environments, so the live/test difference is a value
+difference a diff shows rather than a presence difference a diff must be read
+for. In test, the canonical host and the single test hostname are deliberately
+the same string: that identity is what makes `isTestHost()` true for every
+request the test environment serves.
+
+The storefront's Medusa credential is `MEDUSA_PUBLISHABLE_API_KEY`. That is the
+name `storefront/src/config/runtime-env.ts` lists and `src/lib/medusa-client.ts`
+requires; these manifests previously named it `MEDUSA_PUBLISHABLE_KEY`, with the
+right Secret and the right key, so External Secrets projected the credential
+correctly and every Store API call from the storefront would still have failed.
+The Secret name and key are unchanged, and the aggregate Secret contract could
+not have caught it, because it compares Secret names and keys and both were
+right.
+
 Newsletter API credentials are an existing runtime Secret projection but are
 mounted only by the backend API pod; workers and lifecycle Jobs cannot subscribe
 addresses. That pod also enforces a deployment-wide limit of 20 valid signup

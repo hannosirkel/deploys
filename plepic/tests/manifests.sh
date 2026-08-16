@@ -408,8 +408,13 @@ def assert_network_contract(documents, suffix)
   raise 'Redis ingress selector mismatch' unless redis.dig('spec', 'podSelector', 'matchLabels') == {
     'app.kubernetes.io/component' => 'redis',
   }
+  # The two Jobs are admitted for the same reason they are admitted to
+  # PostgreSQL: they run the backend image, whose module container opens a Redis
+  # connection at module scope, so a Job that cannot reach Redis does not skip
+  # the event bus — it retries forever. For the predeploy Job that is a Sync
+  # hook that never completes, which blocks every wave behind it.
   raise 'Redis ingress mismatch' unless redis.dig('spec', 'ingress') == [{
-    'from' => %w[backend worker].map do |component|
+    'from' => %w[backend worker predeploy catalogue-import].map do |component|
       { 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => component } } }
     end,
     'ports' => [{ 'port' => 6379, 'protocol' => 'TCP' }],
@@ -446,7 +451,7 @@ def assert_network_contract(documents, suffix)
     'matchExpressions' => [{
       'key' => 'app.kubernetes.io/component',
       'operator' => 'In',
-      'values' => %w[backend worker],
+      'values' => %w[backend worker predeploy catalogue-import],
     }],
   }
   raise 'Redis egress mismatch' unless redis_egress.dig('spec', 'egress') == [{
@@ -504,7 +509,7 @@ def assert_network_contract(documents, suffix)
 end
 
 def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, secrets:, pvc_sizes:, resources:,
-                    overlay_path: nil)
+                    site_hosts:, overlay_path: nil)
   documents = YAML.load_stream(File.read(path)).compact
   # The overlay is read from disk rather than recovered from the rendered
   # documents, because what the assertions just below check is the source the
@@ -772,6 +777,26 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     end
     expected_session_refs = %w[COOKIE_SECRET JWT_SECRET].map { |key| [key, runtime_secret, key] }
     raise 'backend-family session secret contract mismatch' unless session_refs.sort == expected_session_refs.sort
+    # Redis, per workload, for the same reason and with the same blind spot in
+    # mind. The aggregate ESO key contract further down is satisfied the moment
+    # *any* workload references REDIS_PASSWORD, which is exactly how the two
+    # Jobs shipped without it while the backend and worker carried it — the same
+    # shape of miss as the session secrets above.
+    #
+    # The host and port are checked separately, by the Service-endpoint table
+    # below, which is strictly stronger than a declaration check: it requires
+    # REDIS_HOST to name a Service in this overlay whose port is REDIS_PORT. So
+    # only the credential is asserted here, and only that it arrives by
+    # reference from this environment's runtime Secret under its own key. A
+    # literal password in a manifest is refused by the shape of this assertion,
+    # not merely discouraged.
+    redis_refs = container.fetch('env', []).filter_map do |entry|
+      next unless entry['name'] == 'REDIS_PASSWORD'
+      reference = entry.dig('valueFrom', 'secretKeyRef')
+      [entry['name'], reference&.fetch('name'), reference&.fetch('key')]
+    end
+    raise 'backend-family Redis secret contract mismatch' unless
+      redis_refs == [['REDIS_PASSWORD', runtime_secret, 'REDIS_PASSWORD']]
     raise 'backend-family SMTP port must be submission 587' unless env_value(container, 'SMTP_PORT') == '587'
     raise 'backend-family SMTP host must remain deployment-supplied' unless env_value(container, 'SMTP_HOST')&.end_with?('.invalid')
     raise 'backend-family envelope sender must be synthetic' unless env_value(container, 'SMTP_ENVELOPE_FROM')&.end_with?('@example.com')
@@ -874,11 +899,21 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   service_ports = actual_services.to_h do |service|
     [service.dig('metadata', 'name'), service.dig('spec', 'ports', 0, 'port').to_s]
   end
+  # Every backend-image workload reaches both data services, and the two Jobs
+  # are not the exception they were written as. `medusa exec` boots the full
+  # module container — `skipLoadingEntryPoints` skips routes and subscribers,
+  # not modules — so the Redis event bus and workflow engine connect at module
+  # load in a Job exactly as they do in a Deployment.
+  #
+  # This is stronger than asking whether the variables are declared: the host
+  # must name a Service this overlay actually renders, and the port must be that
+  # Service's port. A Job pointed at the other environment's Redis, or at the
+  # right host on the wrong port, is refused here rather than at first sync.
   endpoint_workloads = {
     "plepic-backend#{suffix}" => %w[DATABASE REDIS],
     "plepic-worker#{suffix}" => %w[DATABASE REDIS],
-    "plepic-predeploy#{suffix}" => %w[DATABASE],
-    "plepic-catalogue-import#{suffix}" => %w[DATABASE],
+    "plepic-predeploy#{suffix}" => %w[DATABASE REDIS],
+    "plepic-catalogue-import#{suffix}" => %w[DATABASE REDIS],
   }
   endpoint_workloads.each do |name, endpoint_types|
     kind = name.include?('predeploy') || name.include?('catalogue-import') ? 'Job' : 'Deployment'
@@ -898,6 +933,97 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   backend_url = URI(storefront_environment.fetch('MEDUSA_BACKEND_URL'))
   raise 'storefront has dangling backend Service endpoint' unless
     backend_url.scheme == 'http' && service_ports[backend_url.host] == backend_url.port.to_s
+
+  # The site's own identity — the one thing the storefront was shipped without.
+  #
+  # `storefront/src/config/hosts.ts` does not fail when these are absent. It
+  # falls back to `https://example.com` for SITE_BASE_URL, derives
+  # SITE_CANONICAL_HOST from it, and `readEnvList` answers `[]` for an absent
+  # SITE_TEST_HOSTNAMES. A deployment that forgets them therefore starts,
+  # serves, and looks healthy while emitting example.com as every canonical
+  # URL, `og:url`, sitemap entry and `hreflang` alternate — and while
+  # `isTestHost()` answers false for every request, which is precisely how the
+  # test environment ships without `noindex`. Nothing crashes and nothing warns.
+  # That is the failure a manifest contract has to catch, because the
+  # application deliberately cannot: hosts.ts's own note says "nothing here is
+  # optional-and-silently-absent, because a silently absent canonical host is
+  # how a redirect loop or an un-canonicalised duplicate page ships unnoticed."
+  #
+  # Live declares SITE_TEST_HOSTNAMES empty rather than omitting it, on the same
+  # reasoning as STORE_CORS/ADMIN_CORS/AUTH_CORS above: `readEnvList` cannot
+  # tell empty from absent, so the value costs nothing at runtime and buys the
+  # reviewer the difference between "live has no unindexed hostname" as a stated
+  # decision and as an omission. It also lets this contract require all three in
+  # both environments, so the live/test difference is a *value* difference a
+  # diff shows, never a presence difference a diff has to be read for.
+  storefront_container = pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}"))
+    .dig('containers', 0)
+  site_hosts.each do |name, expected|
+    # Every occurrence, not the first: Kubernetes accepts a duplicate name and
+    # the later assignment wins, so a guard that stopped at the first match
+    # would read a hostname the container never sees.
+    entries = storefront_container.fetch('env', []).select { |entry| entry['name'] == name }
+    raise "storefront must declare #{name} exactly once" unless entries.length == 1
+    # A literal, and never a reference. None of the three is a credential, and a
+    # `valueFrom` would move the site's public identity out of the one place a
+    # reviewer of this repository can read it. That is not a separate `raise`,
+    # because an entry delivered by reference carries no `value` at all and this
+    # comparison refuses it on the spot — a `raise` for it could never be
+    # reached, and an unreachable assertion is one a future edit deletes in
+    # silence.
+    raise "storefront #{name} mismatch" unless entries.first['value'] == expected
+  end
+  # Two properties are pinned by that equality rather than by assertions of
+  # their own, and are recorded here because the values alone do not explain
+  # themselves. Both are held by the table in `live_options` / `test_options`.
+  #
+  # *The names are reserved.* `example.com` and `test.example.org` are RFC 2606
+  # names, exactly as every address in this repository is, for the reason
+  # RESERVED_EXAMPLE_DOMAINS states above: the real per-environment hostnames
+  # are injected from Orange and never rendered here.
+  #
+  # *The canonical host is the base URL's host, and in test it is also the one
+  # entry in the test-hostname list.* hosts.ts derives the canonical host from
+  # the base URL when SITE_CANONICAL_HOST is absent, so two declared values that
+  # disagree are a state the application never produces on its own — canonical
+  # links pointing at one origin while requests are canonicalised to another.
+  # And a test environment whose own hostname is missing from its list is the
+  # `noindex` failure this whole block exists for, so the two test values are
+  # deliberately the same string.
+  #
+  # Neither is a separate `raise`, because neither would be reachable: the
+  # equality above refuses any rendered value that violates them first, and an
+  # assertion no mutation can reach is one a future edit deletes silently.
+
+  # Only the storefront. These three configure the public site's identity, and
+  # nothing else renders a canonical URL, a sitemap, or a `noindex`. A copy on
+  # the backend or a Job is drift with no reader — and, worse, a second place a
+  # future edit can update instead of this one.
+  site_host_names = site_hosts.keys
+  site_host_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    declared = site_host_names.select { |name| env_present?(containers, name) }
+    [workload.dig('metadata', 'name'), declared.sort] unless declared.empty?
+  end.to_h
+  raise 'the site host configuration must reach only the storefront' unless site_host_consumers == {
+    "plepic-storefront#{suffix}" => site_host_names.sort,
+  }
+
+  # The Medusa publishable key, by the name the storefront actually reads.
+  #
+  # `storefront/src/config/runtime-env.ts` lists MEDUSA_PUBLISHABLE_API_KEY, and
+  # `src/lib/medusa-client.ts` throws "MEDUSA_PUBLISHABLE_API_KEY is required
+  # for Store API requests" without it. These manifests supplied
+  # MEDUSA_PUBLISHABLE_KEY — the right Secret, the right key, the wrong variable
+  # — so ESO projected the credential correctly and every Store API call from
+  # the storefront would still have failed. The aggregate Secret contract below
+  # cannot see this: it compares Secret names and keys, and both were right.
+  publishable_entries = storefront_container.fetch('env', [])
+    .select { |entry| entry['name'].to_s.start_with?('MEDUSA_PUBLISHABLE') }
+  publishable_secret = environment == 'test' ? 'plepic-test-publishable-key' : 'plepic-publishable-key'
+  raise 'storefront publishable-key variable contract mismatch' unless
+    publishable_entries.map { |entry| [entry['name'], entry.dig('valueFrom', 'secretKeyRef')] } ==
+    [['MEDUSA_PUBLISHABLE_API_KEY', { 'name' => publishable_secret, 'key' => 'publishableKey' }]]
 
   secret_references = Hash.new { |hash, key| hash[key] = [] }
   documents.each do |document|
@@ -1076,6 +1202,14 @@ live_options = {
   },
   pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
   resources: live_resources,
+  # Reserved names, and an explicitly empty test-hostname list: live indexes
+  # every hostname it answers to. See the block in assert_manifest for why the
+  # empty value is declared rather than omitted.
+  site_hosts: {
+    'SITE_BASE_URL' => 'https://example.com',
+    'SITE_CANONICAL_HOST' => 'example.com',
+    'SITE_TEST_HOSTNAMES' => '',
+  },
 }
 test_options = {
   environment: 'test', namespace: 'plepic-test', suffix: '-test',
@@ -1087,6 +1221,14 @@ test_options = {
   },
   pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
   resources: test_resources,
+  # The test environment's canonical host is also the one entry in its own
+  # test-hostname list. That identity is what makes isTestHost() true for every
+  # request this deployment serves, and therefore what puts `noindex` on it.
+  site_hosts: {
+    'SITE_BASE_URL' => 'https://test.example.org',
+    'SITE_CANONICAL_HOST' => 'test.example.org',
+    'SITE_TEST_HOSTNAMES' => 'test.example.org',
+  },
 }
 
 live = assert_manifest(ARGV.fetch(0), **live_options)
@@ -1276,6 +1418,206 @@ assert_mutation_rejected(
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env') <<
     { 'name' => 'STORE_CORS', 'value' => 'https://store.example.test' }
+end
+
+# ---------------------------------------------------------------------------
+# Redis reaching the two Jobs.
+#
+# Each mutation below is reachable by exactly one of the assertions this change
+# added or widened. That is the point of writing them one property at a time:
+# an assertion whose mutation is also caught by an older guard is one a future
+# edit can delete with the suite staying green, which is how a guard in this
+# file ended up with no kill test behind it before.
+# ---------------------------------------------------------------------------
+
+# The NetworkPolicy half, ingress. Nothing else in the contract reads this list,
+# so reverting it to the two Deployments is refused only here — and it is the
+# revert that matters, because the Jobs' environment can be perfectly correct
+# while the policy silently drops every packet they send.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'Redis ingress that does not admit the migration Job',
+  'Redis ingress mismatch'
+) do |documents|
+  redis = resource(documents, 'NetworkPolicy', 'allow-redis-ingress-test')
+  redis.fetch('spec').fetch('ingress').first.fetch('from').reject! do |peer|
+    peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/component') == 'predeploy'
+  end
+end
+
+# The egress half. Separate policy, separate selector, separate mutation: a
+# widened ingress with an unwidened egress is still a Job that cannot connect,
+# and one assertion covering both would have let that state through.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'Redis egress that does not admit the two Jobs',
+  'Redis egress selector mismatch'
+) do |documents|
+  redis_egress = resource(documents, 'NetworkPolicy', 'allow-redis-egress-test')
+  redis_egress.dig('spec', 'podSelector', 'matchExpressions').first['values'] = %w[backend worker]
+end
+
+# A Job missing REDIS_PASSWORD outright — the state both Jobs shipped in.
+#
+# The aggregate ESO key contract cannot see this: the backend and the worker
+# still reference REDIS_PASSWORD, so the Secret's key set is unchanged and
+# stays green. Only the per-workload assertion notices, which is the whole
+# reason it is written per workload.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the migration Job missing the Redis credential',
+  'backend-family Redis secret contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('env')
+    .reject! { |entry| entry['name'] == 'REDIS_PASSWORD' }
+end
+
+# The same variable, present, from the right Secret, under the wrong key.
+#
+# Deliberately a key that Secret already projects, so the aggregate contract
+# sees a name and key set it expects and reports nothing. The Job would start,
+# authenticate to Redis with the database password, and fail at the first
+# command — or, worse, succeed if the two ever matched.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Redis credential read from the wrong key of the right Secret',
+  'backend-family Redis secret contract mismatch'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env').each do |entry|
+    next unless entry['name'] == 'REDIS_PASSWORD'
+    entry['valueFrom']['secretKeyRef']['key'] = 'DATABASE_PASSWORD'
+  end
+end
+
+# REDIS_HOST declared and pointing somewhere real that is not Redis. Every
+# declaration check in this file is satisfied — the variable is present, it has
+# a literal value, and it names a Service this overlay renders — so only the
+# Service-endpoint table refuses it, on the port not matching.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a Job pointed at a Service that is not Redis',
+  'plepic-predeploy-test has dangling REDIS Service endpoint'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('env').each do |entry|
+    entry['value'] = 'plepic-postgresql-test' if entry['name'] == 'REDIS_HOST'
+  end
+end
+
+# The other half of the endpoint check, on the other Job and the other field.
+# A port that is not the Redis Service's port: the host is right, the variable
+# is declared, and only the pairing is wrong — which is what the endpoint table
+# compares and nothing else in this file does. Written against the second Job so
+# each row of that table has a mutation of its own; a single mutation would have
+# left the other row deletable with the suite green.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a Job pointed at the right Redis Service on the wrong port',
+  'plepic-catalogue-import-test has dangling REDIS Service endpoint'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first.fetch('env').each do |entry|
+    entry['value'] = '6380' if entry['name'] == 'REDIS_PORT'
+  end
+end
+
+# ---------------------------------------------------------------------------
+# The site's host configuration.
+#
+# The failure these bound is silent by construction: hosts.ts falls back to
+# `https://example.com` and to an empty test-hostname list, so every one of
+# these mutations produces a storefront that starts and serves.
+# ---------------------------------------------------------------------------
+
+# A variable dropped. This is the state the storefront shipped in for all three.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the storefront missing its canonical host',
+  'storefront must declare SITE_CANONICAL_HOST exactly once'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers').first.fetch('env')
+    .reject! { |entry| entry['name'] == 'SITE_CANONICAL_HOST' }
+end
+
+# A duplicate carrying the *same* value, so the value assertion is satisfied and
+# only the "exactly once" half objects. It matters because Kubernetes takes the
+# last assignment: once duplication is tolerated, a second entry with a
+# different value is a one-word edit away and reads as a no-op in review.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a site hostname list duplicated with an identical second entry',
+  'storefront must declare SITE_TEST_HOSTNAMES exactly once'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers').first.fetch('env') <<
+    { 'name' => 'SITE_TEST_HOSTNAMES', 'value' => 'test.example.org' }
+end
+
+# The base URL delivered by reference. The Secret and key are ones this overlay
+# already projects, so the aggregate Secret contract is untouched and green; the
+# site's public identity would simply have left the manifest, and the storefront
+# would fall back to example.com if the projection were ever wrong. The value
+# comparison is what refuses it — an entry with a `valueFrom` has no `value` —
+# which is why there is no separate literal-delivery assertion above.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the base URL delivered by Secret reference instead of declared',
+  'storefront SITE_BASE_URL mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers').first.fetch('env').each do |entry|
+    next unless entry['name'] == 'SITE_BASE_URL'
+    entry.delete('value')
+    entry['valueFrom'] =
+      { 'secretKeyRef' => { 'name' => 'plepic-test-runtime-credentials', 'key' => 'STRIPE_PUBLISHABLE_KEY' } }
+  end
+end
+
+# The `noindex` regression itself, in the one form every structural check
+# accepts: the variable is declared exactly once, as a literal, and is empty —
+# which `readEnvList` reads as no test hostnames at all, so isTestHost() answers
+# false for the test environment's own hostname and the test site becomes
+# indexable. Only the per-environment value refuses it.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the test environment declaring an empty test-hostname list',
+  'storefront SITE_TEST_HOSTNAMES mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers').first.fetch('env').each do |entry|
+    entry['value'] = '' if entry['name'] == 'SITE_TEST_HOSTNAMES'
+  end
+end
+
+# A second home for the site's identity. Harmless-looking, and the reason the
+# scoping assertion exists: two places to update is one place to forget, and the
+# worker renders no canonical URL for the value to have any effect on.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the base URL copied onto a workload that renders no page',
+  'the site host configuration must reach only the storefront'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod_spec(worker).fetch('containers').first.fetch('env') <<
+    { 'name' => 'SITE_BASE_URL', 'value' => 'https://test.example.org' }
+end
+
+# The publishable key under the name these manifests used to give it. The Secret
+# name and key are correct and unchanged, so the aggregate Secret contract is
+# satisfied exactly as it was while the storefront could not make a single Store
+# API call. Only the variable-name contract sees it.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the publishable key under the name the storefront does not read',
+  'storefront publishable-key variable contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers').first.fetch('env').each do |entry|
+    entry['name'] = 'MEDUSA_PUBLISHABLE_KEY' if entry['name'] == 'MEDUSA_PUBLISHABLE_API_KEY'
+  end
 end
 
 # A backend-image sidecar named by *tag*. This is the case the replaced sentinel

@@ -203,11 +203,19 @@ patches:
               - name: storefront
                 env:
                   - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend-test:8112"}
+                  # The test environment's own identity. Its canonical host is
+                  # also the one entry in its test-hostname list, which is what
+                  # makes `isTestHost()` true for every request this deployment
+                  # serves and therefore what puts `noindex` on it. Reserved
+                  # names; Orange injects the real ones.
+                  - {name: SITE_BASE_URL, value: "https://test.example.org"}
+                  - {name: SITE_CANONICAL_HOST, value: test.example.org}
+                  - {name: SITE_TEST_HOSTNAMES, value: test.example.org}
                   - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
                   - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
                   - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
                   - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
-                  - name: MEDUSA_PUBLISHABLE_KEY
+                  - name: MEDUSA_PUBLISHABLE_API_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
@@ -229,8 +237,11 @@ patches:
                 env:
                   - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
+                  - {name: REDIS_HOST, value: plepic-redis-test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: REDIS_PASSWORD}}
                   - name: MEDUSA_ADMIN_EMAIL
                     valueFrom: {secretKeyRef: {name: plepic-test-database-admin, key: MEDUSA_ADMIN_EMAIL}}
                   - name: MEDUSA_ADMIN_PASSWORD
@@ -274,8 +285,11 @@ patches:
                 env:
                   - {name: DATABASE_HOST, value: plepic-postgresql-test}
                   - {name: DATABASE_NAME, value: plepic_test}
+                  - {name: REDIS_HOST, value: plepic-redis-test}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: REDIS_PASSWORD}}
                   - name: COOKIE_SECRET
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: COOKIE_SECRET}}
                   - name: JWT_SECRET
