@@ -17,7 +17,49 @@ for environment in live test; do
 done
 
 ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" <<'RUBY'
+# What every container image in the rendered overlays must carry.
+#
+# This is a *shape*, deliberately, and it is what this file asserts instead of
+# any particular digest value. The assertions it replaces compared images to the
+# all-zero bootstrap sentinel, which made them mutually exclusive with promotion
+# by construction: they required the sentinel, and promotion is precisely what
+# replaces it. The first `deploy-test` label was refused by this file rather than
+# by anything wrong with the manifests it was checking.
+#
+# Two consequences are the point rather than a side effect. A promoted overlay
+# and an unpromoted one are the same shape here, so the environment that is
+# behind does not break the moment the other moves ahead — no assertion below
+# knows or asks which environment it is looking at. And because the property is
+# structural, no future promotion touches this file at all.
+DIGEST_SHAPE = /\Asha256:[0-9a-f]{64}\z/.freeze
+
+# The bootstrap value Task 4 put in both overlays. Nothing below requires it any
+# more; it survives as the one thing that must be *accepted*, because "the
+# sentinel is still a valid digest" is the half of the asymmetry a shape test
+# could silently lose while every other case still passed.
 SENTINEL = "sha256:#{'0' * 64}"
+
+raise 'the all-zero bootstrap sentinel must satisfy the digest shape' unless
+  SENTINEL.match?(DIGEST_SHAPE)
+
+# Negative controls on the shape itself. A digest test that accepted a truncated
+# or non-hexadecimal string would pass every manifest in this repository today
+# and pin nothing, so prove it discriminates before trusting it.
+{
+  SENTINEL => true,
+  "sha256:#{'a' * 64}" => true,
+  "sha256:#{'0' * 63}" => false,
+  "sha256:#{'0' * 65}" => false,
+  "sha256:#{'A' * 64}" => false,
+  "sha256:#{'g' * 64}" => false,
+  "sha512:#{'0' * 64}" => false,
+  "SHA256:#{'0' * 64}" => false,
+  'latest' => false,
+  '' => false,
+}.each do |candidate, expected|
+  actual = candidate.match?(DIGEST_SHAPE)
+  raise "digest shape control failed: #{candidate.inspect} matched=#{actual}" unless actual == expected
+end
 
 def resource(documents, kind, name)
   matches = documents.select do |document|
@@ -124,16 +166,19 @@ def pod_containers(pod)
 end
 
 BACKEND_IMAGE = 'ghcr.io/hannosirkel/plepic-backend'.freeze
+STOREFRONT_IMAGE = 'ghcr.io/hannosirkel/plepic-storefront'.freeze
+APPLICATION_IMAGE_PREFIX = 'ghcr.io/hannosirkel/plepic-'.freeze
 
 # An image reference reduced to its repository, discarding tag and digest.
 #
 # Matching the digest form alone is not enough. A container naming the same
-# image by tag is invisible to a `…@` prefix test, and the two things that make
-# that unreachable today are both temporary: the overlay's `images:` transformer
-# rewrites any container using this repository to the pinned digest, and the
-# transitional all-zero sentinel counter refuses a fifth digest-pinned
-# container. The sentinel counter is rewritten at the first digest promotion,
-# which is exactly when a guard resting on it would quietly stop holding.
+# image by tag is invisible to a `…@` prefix test. This file used to predict
+# here that its own sentinel counter would stop holding at the first promotion,
+# and it did: the counters compared exact digest strings, so a tag-form
+# reference slipped past them, and they refused promotion outright rather than
+# ageing quietly. Both failures are closed by asserting a digest *shape* on
+# every container and running the census through this reducer, so neither the
+# census nor the digest requirement depends on any particular digest value.
 #
 # A tag is the part after the last colon of the final path segment, so the colon
 # in a registry's `host:port` is not mistaken for one.
@@ -464,7 +509,12 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'overlay namespace mismatch' unless overlay['namespace'] == namespace
   expected_images = %w[ghcr.io/hannosirkel/plepic-backend ghcr.io/hannosirkel/plepic-storefront]
   raise 'overlay image names mismatch' unless overlay.fetch('images').map { |image| image['name'] }.sort == expected_images.sort
-  raise 'overlay must retain both Task 4 sentinels' unless overlay.fetch('images').all? { |image| image['digest'] == SENTINEL }
+  # Every overlay image entry pins a digest — the bootstrap sentinel and a
+  # promoted digest are equally valid here, and an entry that pins only a tag,
+  # or nothing, is not. The rendered check further down is the authoritative one;
+  # this refuses the same mistake at the source it would be written into.
+  raise 'overlay images must be pinned by digest' unless
+    overlay.fetch('images').all? { |image| image['digest'].to_s.match?(DIGEST_SHAPE) }
   raise 'Namespace resources are owned by Orange' if documents.any? { |document| document['kind'] == 'Namespace' }
   raise 'Ingress is forbidden' if documents.any? { |document| document['kind'] == 'Ingress' }
   raise 'Role and RoleBinding are forbidden' if documents.any? { |document| %w[Role RoleBinding ClusterRole ClusterRoleBinding].include?(document['kind']) }
@@ -563,11 +613,45 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'PostgreSQL must be digest pinned' unless postgresql_image&.match?(%r{\Apostgres:[^@]+@sha256:[0-9a-f]{64}\z})
   raise 'Redis must be digest pinned' unless redis_image&.match?(%r{\Aredis:[^@]+@sha256:[0-9a-f]{64}\z})
 
-  application_images = documents.flat_map do |document|
-    (pod = pod_spec(document)) ? pod_containers(pod).map { |container| container['image'] } : []
-  end.select { |image| image&.start_with?('ghcr.io/hannosirkel/plepic-') }
-  raise 'Task 4 backend image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-backend@#{SENTINEL}") == 4
-  raise 'Task 4 storefront image sentinel mismatch' unless application_images.count("ghcr.io/hannosirkel/plepic-storefront@#{SENTINEL}") == 1
+  # Named containers, because "which container" is the only useful thing to say
+  # about an unpinned image and the two assertions below both need the pairing.
+  named_containers = documents.flat_map do |document|
+    next [] unless (pod = pod_spec(document))
+    pod_containers(pod).map { |container| [document.dig('metadata', 'name'), container] }
+  end
+
+  # Every container image in the rendered overlays carries an `@sha256:` digest.
+  #
+  # Not only the application images: PostgreSQL and Redis are pinned by the two
+  # assertions just above, but a future container added to any pod is inside this
+  # one the moment it appears rather than the moment someone remembers to pin it.
+  # initContainers and ephemeralContainers included — a debug surface pulling a
+  # mutable tag is the same unpinned image with a smaller audience.
+  named_containers.each do |name, container|
+    reference = container['image'].to_s
+    digest = reference.split('@', 2)[1]
+    raise "#{name}/#{container['name']} must pin its image by digest, not #{reference.inspect}" unless
+      digest&.match?(DIGEST_SHAPE)
+  end
+
+  # The container census the replaced sentinel counters also carried, kept whole:
+  # four containers run the backend image, one runs the storefront image.
+  #
+  # Two things below rest on it. The backend-image workload set is only a
+  # meaningful assertion while the container count is bounded, and the mutation
+  # that moves the backend image onto the storefront is reachable *because* a
+  # fifth backend-image container is refused here first.
+  #
+  # Counted through image_repository rather than on an exact reference, so a
+  # container naming an application image by tag is counted rather than
+  # invisible — the blindness that made the old counters miss exactly the case
+  # they were supposed to bound. Comparing the whole tally rather than two counts
+  # additionally refuses a third `plepic-` repository nobody declared.
+  application_image_census = named_containers
+    .map { |_name, container| image_repository(container['image']) }
+    .tally.select { |repository, _count| repository.start_with?(APPLICATION_IMAGE_PREFIX) }
+  raise "application image census mismatch: #{application_image_census.inspect}" unless
+    application_image_census == { BACKEND_IMAGE => 4, STOREFRONT_IMAGE => 1 }
 
   pvc_sizes.each do |name, size|
     pvc = resource(documents, 'PersistentVolumeClaim', "plepic-#{name}#{suffix}")
@@ -664,10 +748,15 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     plepic-predeploy#{suffix}
     plepic-worker#{suffix}
   ].sort
-  # Which *workloads* run it, deduplicated on purpose: a second backend-image
-  # container inside one of these pods is not a set violation, it is one more
-  # container that has to satisfy the environment contract below. Comparing the
-  # undeduplicated list would refuse it here and never check its environment.
+  # Which *workloads* run it, deduplicated on purpose: this assertion is about
+  # the set of workloads, and comparing an undeduplicated list would conflate a
+  # workload that should not run the image with a pod that runs it twice.
+  #
+  # The container count is bounded upstream, not here. The census refuses a fifth
+  # backend-image container whatever form it is named in, so a second such
+  # container inside one of these pods is now stopped before this point rather
+  # than falling through to the environment contract below. That contract still
+  # covers every container it can reach, which is the four the census permits.
   raise 'backend-image workload set mismatch' unless
     backend_image_containers.map(&:first).uniq.sort == expected_backend_image_workloads
   backend_image_containers.each do |name, container|
@@ -1132,16 +1221,27 @@ assert_mutation_rejected(
     { 'name' => 'STORE_CORS', 'value' => 'https://store.example.test' }
 end
 
-# A backend-image sidecar named by *tag*. The sentinel counter counts exact
-# digest strings, so a tag-form reference slips past it entirely — this is the
-# case a guard written on the `…@` prefix could not see, and the one that
-# outlives the sentinel. It is hardened and resourced so the mutation reaches
-# the environment contract rather than dying in pod hardening, and it is
-# appended so the resource contract still reads container 0.
+# A backend-image sidecar named by *tag*. This is the case the replaced sentinel
+# counters could not see: they compared exact digest strings, so a tag-form
+# reference slipped past them entirely, and the only thing that caught this
+# mutation was the sidecar failing to supply the backend image's environment —
+# an incidental rejection that said nothing about the tag.
+#
+# It is now refused on its own terms, and earlier: the digest requirement is a
+# property of every container, so an unpinned image is refused for being
+# unpinned rather than for whatever else happens to be wrong with it. The
+# expected message changed for that reason and only that reason; the mutation is
+# unchanged, and the case it covers is now caught by two independent guards,
+# since the census counts this container as a fifth backend-image container too.
+#
+# It stays hardened and resourced so the mutation reaches the image assertions
+# rather than dying in pod hardening, and it is appended so the resource contract
+# still reads container 0.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'a backend-image sidecar referenced by tag',
-  "plepic-backend-test/rogue-sidecar does not supply the backend image's required environment"
+  'plepic-backend-test/rogue-sidecar must pin its image by digest, ' \
+  'not "ghcr.io/hannosirkel/plepic-backend:latest"'
 ) do |documents|
   backend = resource(documents, 'Deployment', 'plepic-backend-test')
   pod_spec(backend).fetch('containers') << {
@@ -1159,10 +1259,11 @@ assert_mutation_rejected(
   }
 end
 
-# The image-count guard above already refuses a fifth backend-image container,
-# so the reachable failure for this one is the image landing on a *different*
-# workload while both counts stay correct — which is what swapping the worker's
-# and the storefront's images produces.
+# The census above already refuses a fifth backend-image container, so the
+# reachable failure for this one is the image landing on a *different* workload
+# while the census stays correct — which is what swapping the worker's and the
+# storefront's images produces: four backend-image containers and one storefront
+# container still, on the wrong two workloads.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'the backend image moving to a workload that is not configured for it',
@@ -1171,6 +1272,122 @@ assert_mutation_rejected(
   worker = pod_spec(resource(documents, 'Deployment', 'plepic-worker-test')).fetch('containers').first
   storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
   worker['image'], storefront['image'] = storefront['image'], worker['image']
+end
+
+# A digest that is the right shape in outline and not a digest. Truncation is the
+# form a hand-edit or a truncating template produces, and it is the one a guard
+# written as "contains @sha256:" would accept while pinning nothing.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a container pinned to a malformed digest',
+  'plepic-storefront-test/storefront must pin its image by digest'
+) do |documents|
+  storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
+  storefront['image'] = "#{STOREFRONT_IMAGE}@sha256:#{'0' * 63}"
+end
+
+# The census has to hold against a container the digest requirement is perfectly
+# happy with. This sidecar is hardened, resourced and correctly digest pinned, so
+# nothing before the census objects to it; only the count does. Without this the
+# census could be deleted outright and the digest guard alone would keep the
+# suite green.
+HARDENED_SIDECAR_SECURITY = {
+  'allowPrivilegeEscalation' => false,
+  'capabilities' => { 'drop' => ['ALL'] },
+  'readOnlyRootFilesystem' => true,
+}.freeze
+HARDENED_SIDECAR_RESOURCES = {
+  'requests' => { 'cpu' => '100m', 'memory' => '128Mi' },
+  'limits' => { 'cpu' => '500m', 'memory' => '512Mi' },
+}.freeze
+# Not the sentinel, deliberately: a plausible promoted digest, so this case also
+# demonstrates that a real digest is accepted by everything up to the census.
+PLAUSIBLE_DIGEST = "sha256:#{'4b7d' * 16}".freeze
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a fifth backend-image container that is correctly digest pinned',
+  'application image census mismatch'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod_spec(worker).fetch('containers') << {
+    'name' => 'pinned-sidecar',
+    'image' => "#{BACKEND_IMAGE}@#{PLAUSIBLE_DIGEST}",
+    'securityContext' => HARDENED_SIDECAR_SECURITY.dup,
+    'resources' => HARDENED_SIDECAR_RESOURCES.dup,
+  }
+end
+
+# The other half of the census: a backend-image container going missing. The
+# workload keeps running something legitimate and digest pinned, so again only
+# the count notices.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a backend-image container dropped from the census',
+  'application image census mismatch'
+) do |documents|
+  worker = pod_spec(resource(documents, 'Deployment', 'plepic-worker-test')).fetch('containers').first
+  worker['image'] = "postgres:17.10-bookworm@#{PLAUSIBLE_DIGEST}"
+end
+
+# A third application repository nobody declared, at a correct digest, leaving
+# both existing counts untouched. The two replaced counters asserted only that
+# the backend appeared four times and the storefront once; they said nothing
+# about anything else under the `plepic-` prefix, so this container would have
+# been invisible to them. Comparing the whole tally is what refuses it.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'an undeclared application image alongside a correct census',
+  'application image census mismatch'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod_spec(worker).fetch('containers') << {
+    'name' => 'undeclared-sidecar',
+    'image' => "#{APPLICATION_IMAGE_PREFIX}analytics@#{PLAUSIBLE_DIGEST}",
+    'securityContext' => HARDENED_SIDECAR_SECURITY.dup,
+    'resources' => HARDENED_SIDECAR_RESOURCES.dup,
+  }
+end
+
+# The acceptance half, and the reason this file can be trusted not to be sentinel
+# equality wearing a regular expression. Every refusal above would still pass if
+# the digest requirement had been written as "equals the sentinel"; this is the
+# case that separates the two.
+#
+# It is the state the next successful promotion produces — the rendered
+# application images carrying real, non-sentinel digests — asserted through the
+# whole of assert_manifest rather than against the shape in isolation. The
+# overlay on disk is still on the sentinel while these documents are not, which
+# is also the mixed state the environments are in between a test promotion and
+# the release that follows it.
+def assert_promotion_accepted(source_path, options, description)
+  documents = YAML.load_stream(File.read(source_path)).compact
+  yield documents
+  Tempfile.create(['plepic-manifest-promotion', '.yaml']) do |temporary|
+    temporary.write(YAML.dump_stream(*documents))
+    temporary.flush
+    begin
+      assert_manifest(temporary.path, **options)
+    rescue StandardError => error
+      raise "#{description} was refused: #{error.message}"
+    end
+  end
+end
+
+assert_promotion_accepted(
+  ARGV.fetch(1), test_options, 'an overlay promoted to real digests'
+) do |documents|
+  # Two different digests, because live is rebuilt from merged `main` rather
+  # than re-tagged from the tested image, so the two environments never converge
+  # on one value and nothing may assume they do.
+  promoted = { BACKEND_IMAGE => PLAUSIBLE_DIGEST, STOREFRONT_IMAGE => "sha256:#{'9e02' * 16}" }
+  documents.each do |document|
+    next unless (pod = pod_spec(document))
+    pod_containers(pod).each do |container|
+      digest = promoted[image_repository(container['image'])]
+      container['image'] = "#{image_repository(container['image'])}@#{digest}" if digest
+    end
+  end
 end
 
 puts 'Plepic manifest contract tests passed'
