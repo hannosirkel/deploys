@@ -82,9 +82,12 @@ the separate `isCanonicalHost`. The two coincide today only because the test
 storefront answers to exactly one name, and stating the coincidence as the
 mechanism is how a second hostname later gets added to a deployment and not to
 the list, which is a test hostname served without `noindex`. Live carries the
-mirror of the same rule: no hostname it answers to may appear in its list, or
-the live site tells every crawler not to index it while every page still renders
-perfectly.
+mirror of the same rule: no hostname it answers to — as far as a manifest can
+know, which is the host of its base URL and its canonical host — may appear in
+its list, or the live site tells every crawler not to index it while every page
+still renders perfectly. The further names live answers to, the `www` form and
+the retired campaign domains the redirect map serves, are declared in no
+manifest here, so this contract cannot see them and does not claim to.
 
 Three properties are asserted over the **option table** in `tests/manifests.sh`
 rather than over the rendered values, because the rendered values are compared
@@ -220,7 +223,7 @@ from the private inventory, exactly as it does for Servitium's source ranges.
 |---|---|
 | `SITE_BASE_URL` | the test origin, same shape rule |
 | `SITE_CANONICAL_HOST` | the test hostname, bare, equal to the base URL's host |
-| `SITE_TEST_HOSTNAMES` | **every hostname the test storefront answers to**, its canonical host among them. Not "the canonical host": `isTestHost()` matches the request's `Host` header against this list, so a second name the deployment answers to and this list omits is a test hostname served without `noindex` |
+| `SITE_TEST_HOSTNAMES` | **every hostname the test storefront answers to**, its canonical host among them, as a **comma-separated** list of bare hostnames — no scheme, port or path. Not "the canonical host": `isTestHost()` matches the request's `Host` header against this list, so a second name the deployment answers to and this list omits is a test hostname served without `noindex`. `readEnvList` splits on commas only; any other separator leaves the whole value as one entry, which then fails the bare-hostname check and refuses to start rather than silently matching nothing |
 | `ANALYTICS_MEASUREMENT_ID` | **must not be supplied.** One GA property exists with no test data stream, and the test environment has no analytics at all. Absent is the required behaviour, not an omission to be tidied |
 | the three `MERCHANT_*` above, and the real four | the test environment renders the same legal pages |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional, as live |
