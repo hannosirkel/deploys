@@ -40,6 +40,26 @@ spec:
             - {name: DATABASE_USER, value: medusa}
             - name: DATABASE_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            # Redis, from the same Service and the same Secret key the two
+            # Deployments read. `medusa exec` boots the whole module container —
+            # `skipLoadingEntryPoints` skips routes and subscribers, not modules
+            # — and the Redis event bus and workflow engine connect eagerly at
+            # module load, so this Job needs Redis to start even though it
+            # publishes no event of its own.
+            - {name: REDIS_HOST, value: plepic-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: REDIS_PASSWORD}}
+            # Which environment this import believes it is running in.
+            # `readCatalogueImportRuntimeConfig` accepts exactly `live` or
+            # `test` and refuses anything else — including absence — so without
+            # this the Job stages the archive, refuses, disposes of it and exits
+            # non-zero in both environments. It is compared against the identity
+            # recorded for the archive, which is what stops a live export being
+            # imported into test or the reverse. The overlay replaces it; the
+            # per-archive CATALOGUE_IMPORT_ARCHIVE_SHA256 is deliberately not
+            # supplied here, because a placeholder digest is a wrong digest.
+            - {name: CATALOGUE_IMPORT_ENVIRONMENT, value: live}
             # The import runs the backend image and loads the same configuration
             # at module scope, so it needs the same session secrets the two
             # Deployments read — from the same Secret, under the same keys. It

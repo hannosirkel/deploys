@@ -39,6 +39,17 @@ spec:
             - {name: DATABASE_USER, value: medusa}
             - name: DATABASE_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: DATABASE_PASSWORD}}
+            # Redis, from the same Service and the same Secret key the two
+            # Deployments read. `medusa exec` boots the whole module container —
+            # `skipLoadingEntryPoints` skips routes and subscribers, not modules
+            # — and the Redis event bus and workflow engine connect eagerly at
+            # module load. A Job without these does not degrade to an in-process
+            # bus; ioredis retries forever inside this Sync hook at wave -10,
+            # and the sync gate blocks every wave behind it.
+            - {name: REDIS_HOST, value: plepic-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: REDIS_PASSWORD}}
             - name: MEDUSA_ADMIN_EMAIL
               valueFrom: {secretKeyRef: {name: plepic-database-admin, key: MEDUSA_ADMIN_EMAIL}}
             - name: MEDUSA_ADMIN_PASSWORD

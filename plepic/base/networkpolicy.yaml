@@ -72,10 +72,17 @@ spec:
   podSelector:
     matchLabels: {app.kubernetes.io/component: redis}
   policyTypes: [Ingress]
+  # The two Jobs are here for the same reason they are on the PostgreSQL
+  # policies: they run the backend image and load the same module container,
+  # whose event bus and workflow engine open a Redis connection at module
+  # scope. Admitting only the two Deployments left a Sync hook that could
+  # construct its configuration and never finish connecting.
   ingress:
     - from:
         - podSelector: {matchLabels: {app.kubernetes.io/component: backend}}
         - podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: predeploy}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: catalogue-import}}
       ports:
         - {port: 6379, protocol: TCP}
 ---
@@ -126,7 +133,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [backend, worker]
+        values: [backend, worker, predeploy, catalogue-import]
   policyTypes: [Egress]
   egress:
     - to:

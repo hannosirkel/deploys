@@ -43,6 +43,80 @@ running the backend image; that list is declared in `tests/manifests.sh` and
 names its source, because the image's repository is not readable at validation
 time.
 
+`REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` reach **all four** backend-image
+workloads, the two lifecycle Jobs included, and `allow-redis-ingress` and
+`allow-redis-egress` admit all four. The Jobs are not an exception: `medusa exec`
+boots the whole module container — `skipLoadingEntryPoints` skips routes and
+subscribers, not modules — so the Redis event bus and workflow engine open a
+connection at module load in a Job exactly as they do in a Deployment. A Job
+without them does not quietly fall back to an in-process bus; it retries
+forever, and for the predeploy Job that is a Sync hook that never completes and
+a sync gate that blocks every wave behind it. No `REDIS_URL` is supplied here:
+the three parts are what these manifests project and the application composes
+the URL, the same split as the five `DATABASE_*` parts.
+
+`SITE_BASE_URL`, `SITE_CANONICAL_HOST`, and `SITE_TEST_HOSTNAMES` are declared on
+the storefront in both environments with reserved-name placeholders, and the real
+per-environment hostnames are injected from Orange. They are declared rather than
+left to the application's defaults because those defaults do not fail:
+`storefront/src/config/hosts.ts` falls back to `https://example.com` and to an
+empty test-hostname list, so an unconfigured storefront starts and serves while
+emitting `example.com` as every canonical URL, `og:url`, sitemap entry and
+`hreflang` alternate, and while `isTestHost()` answers false for every request —
+which is how a test environment ships without `noindex`.
+
+Live declares `SITE_TEST_HOSTNAMES` **empty** rather than omitting it, on the
+same reasoning as the three CORS variables: `readEnvList` cannot tell an empty
+value from an absent one, so the declaration costs nothing at runtime and buys
+the reviewer the difference between "live has no unindexed hostname" as a stated
+decision and as an omission nobody can date. It also lets the contract require
+all three in both environments, so the live/test difference is a value
+difference a diff shows rather than a presence difference a diff must be read
+for.
+
+The rule the contract holds for test is that **`SITE_TEST_HOSTNAMES` contains
+every hostname the test storefront answers to** — not that it equals the
+canonical host. `isTestHost(host, config)` matches the *incoming request's*
+`Host` header against that list and never consults the canonical host; that is
+the separate `isCanonicalHost`. The two coincide today only because the test
+storefront answers to exactly one name, and stating the coincidence as the
+mechanism is how a second hostname later gets added to a deployment and not to
+the list, which is a test hostname served without `noindex`. Live carries the
+mirror of the same rule: no hostname it answers to — as far as a manifest can
+know, which is the host of its base URL and its canonical host — may appear in
+its list, or the live site tells every crawler not to index it while every page
+still renders perfectly. The further names live answers to, the `www` form and
+the retired campaign domains the redirect map serves, are declared in no
+manifest here, so this contract cannot see them and does not claim to.
+
+Three properties are asserted over the **option table** in `tests/manifests.sh`
+rather than over the rendered values, because the rendered values are compared
+to that table for exact equality and an editor who changes a value must change
+the table in the same commit. An assertion over a rendered value the equality
+already refuses is decoration; the same assertion over the table constrains what
+may be written there. They are: every hostname the table names is an RFC 2606
+reserved name — the structural boundary the address exemption never reached,
+because its pattern requires a `local-part@` and a bare hostname never enters it
+— the canonical host is the base URL's host, and the `noindex` rule above.
+
+`CATALOGUE_IMPORT_ENVIRONMENT` is supplied per environment, `live` in the base
+and `test` in the test overlay, because the import refuses without it: it
+accepts exactly `live` or `test` and compares the value against the identity
+recorded for the staged archive, which is what stops a live export being
+imported into test or the reverse. Its companion
+`CATALOGUE_IMPORT_ARCHIVE_SHA256` is deliberately **not** supplied here — it is
+a per-archive value, so a placeholder would be a plausible-looking wrong digest
+rather than an obvious gap.
+
+The storefront's Medusa credential is `MEDUSA_PUBLISHABLE_API_KEY`. That is the
+name `storefront/src/config/runtime-env.ts` lists and `src/lib/medusa-client.ts`
+requires; these manifests previously named it `MEDUSA_PUBLISHABLE_KEY`, with the
+right Secret and the right key, so External Secrets projected the credential
+correctly and every Store API call from the storefront would still have failed.
+The Secret name and key are unchanged, and the aggregate Secret contract could
+not have caught it, because it compares Secret names and keys and both were
+right.
+
 Newsletter API credentials are an existing runtime Secret projection but are
 mounted only by the backend API pod; workers and lifecycle Jobs cannot subscribe
 addresses. That pod also enforces a deployment-wide limit of 20 valid signup
@@ -120,6 +194,70 @@ backup guarantee. PostgreSQL and assets are durable recovery inputs; Redis AOF
 improves crash recovery but Redis remains rebuildable state. Backup, restore,
 and cross-resource epoch coordination are owned by Orange and must be in place
 and rehearsed before launch.
+
+## What Task 6 must inject
+
+Every value below is per-environment configuration that this public repository
+deliberately does not carry. The tracked manifests hold reserved placeholders or
+nothing at all; Orange patches the real values onto the Argo CD `Application`
+from the private inventory, exactly as it does for Servitium's source ranges.
+**The placeholders in this repository are not defects to be corrected in place**
+— replacing one with a real hostname is the thing the contract tests refuse.
+
+*Storefront, live namespace `plepic`:*
+
+| Variable | Value Task 6 supplies |
+|---|---|
+| `SITE_BASE_URL` | the live public origin: `https://` and the apex hostname, no port, path, query or fragment — `hosts.ts` refuses anything else |
+| `SITE_CANONICAL_HOST` | the same apex hostname, bare; it must equal the base URL's host |
+| `SITE_TEST_HOSTNAMES` | **empty, and it stays empty.** A live hostname here is a live site serving `noindex` |
+| `ANALYTICS_MEASUREMENT_ID` | the GA4 measurement ID. Live only. It is an account identifier, so it reaches a pod only from the inventory and never from a tracked file; absent, the analytics loader never mounts |
+| `MERCHANT_REGISTRATION_NUMBER`, `MERCHANT_VAT_NUMBER`, `MERCHANT_PHONE_NUMBER` | the three legally required disclosures no manifest here declares. Absent, each renders as a named visible gap plus a page-level incompleteness notice — which is why they are deferred rather than placeheld, and also why they must not ship missing |
+| `MERCHANT_LEGAL_NAME`, `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` | the real four, replacing the reserved placeholders these manifests declare |
+| `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional. Absent renders one link fewer and nothing else — no gap marker, no notice. Supply it, but do not hold a release for it |
+| `REDIRECT_MAP_PATH` | **not closable with an environment variable alone.** The storefront reads an operator-supplied file, so this needs a volume, a source for it, and a mount — a Task 6/8 design decision, not a value |
+
+*Storefront, test namespace `plepic-test`:*
+
+| Variable | Value Task 6 supplies |
+|---|---|
+| `SITE_BASE_URL` | the test origin, same shape rule |
+| `SITE_CANONICAL_HOST` | the test hostname, bare, equal to the base URL's host |
+| `SITE_TEST_HOSTNAMES` | **every hostname the test storefront answers to**, its canonical host among them, as a **comma-separated** list of bare hostnames — no scheme, port or path. Not "the canonical host": `isTestHost()` matches the request's `Host` header against this list, so a second name the deployment answers to and this list omits is a test hostname served without `noindex`. `readEnvList` splits on commas only; any other separator leaves the whole value as one entry, which then fails the bare-hostname check and refuses to start rather than silently matching nothing |
+| `ANALYTICS_MEASUREMENT_ID` | **must not be supplied.** One GA property exists with no test data stream, and the test environment has no analytics at all. Absent is the required behaviour, not an omission to be tidied |
+| the three `MERCHANT_*` above, and the real four | the test environment renders the same legal pages |
+| `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional, as live |
+| `REDIRECT_MAP_PATH` | not supplied; the redirect map answers live's retired domains |
+
+*Catalogue-import Job, both namespaces:*
+
+| Variable | Value Task 6 supplies |
+|---|---|
+| `CATALOGUE_IMPORT_ENVIRONMENT` | **already supplied here** — `live` in the base, `test` in the test overlay — and Task 6 must not override it with anything else. The import accepts exactly these two |
+| `CATALOGUE_IMPORT_ARCHIVE_SHA256` | 64 lowercase hex digits, the digest of the archive actually staged, supplied at the run that imports it. A placeholder would be a plausible-looking wrong digest, which is why nothing is declared here |
+
+*Backend-image workloads:* the SMTP host, envelope sender, contact recipient and
+the four merchant values these manifests declare are reserved placeholders on
+the same terms — see "The base also carries reserved non-secret mail and
+merchant placeholders" above — and the live per-Service ingress source ranges
+reach the cluster the same way, as Ansible-rendered patches on the Application.
+
+*Delivery constraints, which are part of the specification:*
+
+- **Literal `value:` entries, never External Secrets.** None of these is a
+  credential, and routing one through ESO would break the exact key-name set
+  `roles/argocd/tasks/openbao-consumers.yml` asserts for every `Owner`
+  projection — a foreign key breaks the workload and the next run's `changed=0`.
+  The storefront contract here independently refuses a site host delivered by
+  reference.
+- **Patch by strategic merge on `env`, keyed on `name`** — not by JSON-patch
+  index. The Servitium precedent replaces `/spec/ingress/0/from` by index, which
+  is brittle here because the index depends on base ordering; the test overlay
+  already merges `env` by `name`, which is why a renamed variable had to be
+  changed in the base *and* the overlay rather than in one of them.
+- Orange's patches are applied to the `Application`, so they never enter this
+  repository and the contract tests never see them. Keeping the tracked values
+  reserved is what lets both remain true.
 
 Validate the rendered contract locally with:
 
