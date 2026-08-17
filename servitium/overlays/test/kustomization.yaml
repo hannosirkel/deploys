@@ -8,7 +8,7 @@ resources:
 images:
   - name: ghcr.io/hannosirkel/servitium
     newName: ghcr.io/hannosirkel/servitium
-    digest: sha256:94a7aec5df0565f91535086fa9c2972e61011a210a57f9326e3164b9dfc4b85d
+    digest: sha256:292a8cb12392b346f74b40caa42b46285553d08bd80d4cb0667446dcb64b1973
 patches:
   - path: deployment-patch.yaml
   - path: service-patch.yaml
