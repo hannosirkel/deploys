@@ -104,9 +104,9 @@ and `test` in the test overlay, because the import refuses without it: it
 accepts exactly `live` or `test` and compares the value against the identity
 recorded for the staged archive, which is what stops a live export being
 imported into test or the reverse. Its companion
-`CATALOGUE_IMPORT_ARCHIVE_SHA256` is deliberately **not** supplied here — it is
-a per-archive value, so a placeholder would be a plausible-looking wrong digest
-rather than an obvious gap.
+`CATALOGUE_IMPORT_ARCHIVE_SHA256` is a per-archive value, so no literal
+placeholder is tracked. The Job reads it by explicit `secretKeyRef` from the
+dedicated one-key `plepic{-test}-import-expectation` Secret instead.
 
 The storefront's Medusa credential is `MEDUSA_PUBLISHABLE_API_KEY`. That is the
 name `storefront/src/config/runtime-env.ts` lists and `src/lib/medusa-client.ts`
@@ -182,12 +182,13 @@ backend it prepares. Sentinel equality forced that implicitly and a per-containe
 shape requirement does not, so it is asserted directly. It compares the digests
 to each other and never to a fixed value, which is why it survives promotion.
 
-Runtime, database-administrator, and Medusa publishable-key Secrets are
-projected by External Secrets and are not rendered here. The publishable key is
-a staged late-bootstrap value: Medusa creates it after the database and backend
-exist, the explicit OpenBao lifecycle imports it separately for test or live,
-and ESO then projects `plepic{-test}-publishable-key` for the storefront. The
-migration Job has no Kubernetes Secret-write authority and mounts no API token.
+Runtime, database-administrator, Medusa publishable-key, redirect-map, and
+import-expectation Secrets are projected by External Secrets and are not
+rendered here. The publishable key is a staged late-bootstrap value: Medusa
+creates it after the database and backend exist, the explicit OpenBao lifecycle
+imports it separately for test or live, and ESO then projects
+`plepic{-test}-publishable-key` for the storefront. The migration Job has no
+Kubernetes Secret-write authority and mounts no API token.
 
 The PVC sizes are local-path storage requests, not quotas, replication, or a
 backup guarantee. PostgreSQL and assets are durable recovery inputs; Redis AOF
@@ -198,9 +199,11 @@ and rehearsed before launch.
 ## What Task 6 must inject
 
 Every value below is per-environment configuration that this public repository
-deliberately does not carry. The tracked manifests hold reserved placeholders or
-nothing at all; Orange patches the real values onto the Argo CD `Application`
-from the private inventory, exactly as it does for Servitium's source ranges.
+deliberately does not carry. Static values have reserved placeholders or are
+absent, and Orange patches their real values onto the Argo CD `Application` from
+the private inventory, exactly as it does for Servitium's source ranges.
+Purpose-specific file or cadenced state instead arrives through the dedicated
+ESO projections whose Secret names and keys these manifests declare.
 **The placeholders in this repository are not defects to be corrected in place**
 — replacing one with a real hostname is the thing the contract tests refuse.
 
@@ -215,7 +218,7 @@ from the private inventory, exactly as it does for Servitium's source ranges.
 | `MERCHANT_REGISTRATION_NUMBER`, `MERCHANT_VAT_NUMBER`, `MERCHANT_PHONE_NUMBER` | the three legally required disclosures no manifest here declares. Absent, each renders as a named visible gap plus a page-level incompleteness notice — which is why they are deferred rather than placeheld, and also why they must not ship missing |
 | `MERCHANT_LEGAL_NAME`, `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` | the real four, replacing the reserved placeholders these manifests declare |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional. Absent renders one link fewer and nothing else — no gap marker, no notice. Supply it, but do not hold a release for it |
-| `REDIRECT_MAP_PATH` | **not closable with an environment variable alone.** The storefront reads an operator-supplied file, so this needs a volume, a source for it, and a mount — a Task 6/8 design decision, not a value |
+| `REDIRECT_MAP_PATH` | **already supplied here** as `/var/run/plepic/redirect-map/redirect-map.json`. The file is projected read-only from exactly the `redirect-map.json` key of `plepic-redirect-map` |
 
 *Storefront, test namespace `plepic-test`:*
 
@@ -227,29 +230,39 @@ from the private inventory, exactly as it does for Servitium's source ranges.
 | `ANALYTICS_MEASUREMENT_ID` | **must not be supplied.** One GA property exists with no test data stream, and the test environment has no analytics at all. Absent is the required behaviour, not an omission to be tidied |
 | the three `MERCHANT_*` above, and the real four | the test environment renders the same legal pages |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional, as live |
-| `REDIRECT_MAP_PATH` | not supplied; the redirect map answers live's retired domains |
+| `REDIRECT_MAP_PATH` | the same literal path and the same map content as live, projected from `plepic-test-redirect-map`. Supplying it in test makes the retired-domain redirects verifiable before public routing exists |
 
 *Catalogue-import Job, both namespaces:*
 
 | Variable | Value Task 6 supplies |
 |---|---|
 | `CATALOGUE_IMPORT_ENVIRONMENT` | **already supplied here** — `live` in the base, `test` in the test overlay — and Task 6 must not override it with anything else. The import accepts exactly these two |
-| `CATALOGUE_IMPORT_ARCHIVE_SHA256` | 64 lowercase hex digits, the digest of the archive actually staged, supplied at the run that imports it. A placeholder would be a plausible-looking wrong digest, which is why nothing is declared here |
+| `CATALOGUE_IMPORT_ARCHIVE_SHA256` | the Job already declares an explicit reference to the same-named key in `plepic-import-expectation` or `plepic-test-import-expectation`. Before each import, Orange supplies the bare 64-lowercase-hex digest of the archive actually staged; no `sha256:` prefix and no tracked literal |
 
 *Backend-image workloads:* the SMTP host, envelope sender, contact recipient and
 the four merchant values these manifests declare are reserved placeholders on
 the same terms — see "The base also carries reserved non-secret mail and
 merchant placeholders" above — and the live per-Service ingress source ranges
 reach the cluster the same way, as Ansible-rendered patches on the Application.
+The backend API alone declares literal `MEDUSA_WORKER_MODE=server`; the worker
+and both lifecycle Jobs deliberately do not. This keeps the API a publisher and
+the worker the only background consumer.
 
 *Delivery constraints, which are part of the specification:*
 
-- **Literal `value:` entries, never External Secrets.** None of these is a
-  credential, and routing one through ESO would break the exact key-name set
-  `roles/argocd/tasks/openbao-consumers.yml` asserts for every `Owner`
-  projection — a foreign key breaks the workload and the next run's `changed=0`.
-  The storefront contract here independently refuses a site host delivered by
-  reference.
+- **Static private configuration uses literal `value:` entries, never External
+  Secrets.** Site identity, analytics, merchant identity, mail routing, and
+  optional external links are Application patches from private inventory. The
+  storefront contract independently refuses a site host delivered by reference.
+- **Redirect content and the archive expectation use separate, exact ESO
+  projections.** Do not add either to the runtime-credential Secret. The
+  storefront volume projects only `redirect-map.json`; the import Job references
+  only `CATALOGUE_IMPORT_ARCHIVE_SHA256`. Because ESO owns those Secrets and they
+  are absent from the Kustomize resource graph, the test overlay explicitly
+  replaces both base Secret names; `nameSuffix` cannot do that association.
+- **Restart the storefront after changing redirect-map data.** The application
+  memoizes the parsed file, so updating the Secret alone does not change redirects
+  in an already-running pod. Roll out both storefronts when the shared map changes.
 - **Patch by strategic merge on `env`, keyed on `name`** — not by JSON-patch
   index. The Servitium precedent replaces `/spec/ingress/0/from` by index, which
   is brittle here because the index depends on base ordering; the test overlay

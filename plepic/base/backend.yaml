@@ -38,6 +38,7 @@ spec:
               protocol: TCP
           env:
             - {name: NODE_ENV, value: production}
+            - {name: MEDUSA_WORKER_MODE, value: server}
             - {name: DATABASE_HOST, value: plepic-postgresql}
             - {name: DATABASE_PORT, value: "5432"}
             - {name: DATABASE_NAME, value: plepic}

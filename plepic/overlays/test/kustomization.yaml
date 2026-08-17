@@ -221,6 +221,12 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
                   - name: TURNSTILE_SITE_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: TURNSTILE_SITE_KEY}}
+            # ESO owns this Secret, so it is absent from the Kustomize resource
+            # graph and nameSuffix cannot rewrite the base reference.
+            volumes:
+              - name: redirect-map
+                secret:
+                  secretName: plepic-test-redirect-map
   - target:
       kind: Job
       name: plepic-predeploy
@@ -290,6 +296,13 @@ patches:
                   # recorded for the staged archive. A copied patch block that
                   # left this on `live` is what would import a live export here.
                   - {name: CATALOGUE_IMPORT_ENVIRONMENT, value: test}
+                  # As with every other ESO-owned Secret reference in this
+                  # overlay, replace the base name explicitly.
+                  - name: CATALOGUE_IMPORT_ARCHIVE_SHA256
+                    valueFrom:
+                      secretKeyRef:
+                        name: plepic-test-import-expectation
+                        key: CATALOGUE_IMPORT_ARCHIVE_SHA256
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD

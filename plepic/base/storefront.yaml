@@ -33,6 +33,10 @@ spec:
             - {name: http, containerPort: 3000, protocol: TCP}
           env:
             - {name: NODE_ENV, value: production}
+            # The operator redirect map is projected from its purpose-specific
+            # Secret below. The application memoizes the parsed file, so replacing
+            # Secret data requires a storefront rollout restart.
+            - {name: REDIRECT_MAP_PATH, value: /var/run/plepic/redirect-map/redirect-map.json}
             # The site's own identity, and reserved placeholders for all three.
             #
             # `storefront/src/config/hosts.ts` reads these and falls back to
@@ -92,8 +96,14 @@ spec:
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: next-cache, mountPath: /app/.next/cache}
+            - {name: redirect-map, mountPath: /var/run/plepic/redirect-map, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}
         - name: next-cache
           emptyDir: {}
+        - name: redirect-map
+          secret:
+            secretName: plepic-redirect-map
+            items:
+              - {key: redirect-map.json, path: redirect-map.json}
