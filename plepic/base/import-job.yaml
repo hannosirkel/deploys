@@ -56,10 +56,16 @@ spec:
             # this the Job stages the archive, refuses, disposes of it and exits
             # non-zero in both environments. It is compared against the identity
             # recorded for the archive, which is what stops a live export being
-            # imported into test or the reverse. The overlay replaces it; the
-            # per-archive CATALOGUE_IMPORT_ARCHIVE_SHA256 is deliberately not
-            # supplied here, because a placeholder digest is a wrong digest.
+            # imported into test or the reverse. The overlay replaces it.
             - {name: CATALOGUE_IMPORT_ENVIRONMENT, value: live}
+            # The per-import expectation is deliberately isolated from runtime
+            # credentials. Orange projects exactly this one key, and the test
+            # overlay explicitly replaces the ESO-owned Secret name.
+            - name: CATALOGUE_IMPORT_ARCHIVE_SHA256
+              valueFrom:
+                secretKeyRef:
+                  name: plepic-import-expectation
+                  key: CATALOGUE_IMPORT_ARCHIVE_SHA256
             # The import runs the backend image and loads the same configuration
             # at module scope, so it needs the same session secrets the two
             # Deployments read — from the same Secret, under the same keys. It

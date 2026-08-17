@@ -969,6 +969,22 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     end
   end
 
+  # The API pod publishes work but must never consume it. In `server` mode the
+  # separate worker is the only BullMQ consumer, which keeps recovery ordering
+  # and worker health observable. The variable is a literal on the backend only:
+  # copying it to the worker or either lifecycle Job changes what those commands
+  # mean and is refused even when the value is still `server`.
+  worker_mode_consumers = workloads(documents).filter_map do |workload|
+    entries = pod_containers(pod_spec(workload)).flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == 'MEDUSA_WORKER_MODE' }
+    end
+    [workload.dig('metadata', 'name'), entries] unless entries.empty?
+  end.to_h
+  raise 'MEDUSA_WORKER_MODE must be literal server on the backend only' unless
+    worker_mode_consumers == {
+      "plepic-backend#{suffix}" => [{ 'name' => 'MEDUSA_WORKER_MODE', 'value' => 'server' }],
+    }
+
   newsletter_keys = %w[NEWSLETTER_API_KEY NEWSLETTER_LIST_ID]
   newsletter_consumers = workloads(documents).filter_map do |workload|
     containers = pod_containers(pod_spec(workload))
@@ -1234,6 +1250,107 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     publishable_entries.map { |entry| [entry['name'], entry.dig('valueFrom', 'secretKeyRef')] } ==
     [['MEDUSA_PUBLISHABLE_API_KEY', { 'name' => publishable_secret, 'key' => 'publishableKey' }]]
 
+  # Redirects are runtime site configuration, but the storefront reads them as
+  # a file and memoizes the parsed result. Project exactly one purpose-specific
+  # Secret key at the literal path the application reads. The explicit item set
+  # prevents the storefront from receiving any later key added to that Secret.
+  redirect_secret = environment == 'test' ? 'plepic-test-redirect-map' : 'plepic-redirect-map'
+  redirect_path_consumers = workloads(documents).filter_map do |workload|
+    entries = pod_containers(pod_spec(workload)).flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == 'REDIRECT_MAP_PATH' }
+    end
+    [workload.dig('metadata', 'name'), entries] unless entries.empty?
+  end.to_h
+  raise 'REDIRECT_MAP_PATH must be the literal projected path on the storefront only' unless
+    redirect_path_consumers == {
+      "plepic-storefront#{suffix}" => [{
+        'name' => 'REDIRECT_MAP_PATH',
+        'value' => '/var/run/plepic/redirect-map/redirect-map.json',
+      }],
+    }
+  storefront = resource(documents, 'Deployment', "plepic-storefront#{suffix}")
+  storefront_pod = pod_spec(storefront)
+  redirect_volumes = storefront_pod.fetch('volumes', []).select { |volume| volume['name'] == 'redirect-map' }
+  raise 'storefront redirect-map Secret volume contract mismatch' unless redirect_volumes == [{
+    'name' => 'redirect-map',
+    'secret' => {
+      'secretName' => redirect_secret,
+      'items' => [{ 'key' => 'redirect-map.json', 'path' => 'redirect-map.json' }],
+    },
+  }]
+  redirect_mounts = storefront_containers.flat_map do |container|
+    container.fetch('volumeMounts', []).select { |mount| mount['name'] == 'redirect-map' }
+  end
+  raise 'storefront redirect-map mount contract mismatch' unless redirect_mounts == [{
+    'name' => 'redirect-map',
+    'mountPath' => '/var/run/plepic/redirect-map',
+    'readOnly' => true,
+  }]
+  redirect_secret_consumers = workloads(documents).filter_map do |workload|
+    names = pod_spec(workload).fetch('volumes', []).filter_map do |volume|
+      volume['name'] if volume.dig('secret', 'secretName') == redirect_secret
+    end
+    [workload.dig('metadata', 'name'), names.sort] unless names.empty?
+  end.to_h
+  raise 'redirect-map Secret must reach only the storefront volume' unless redirect_secret_consumers == {
+    "plepic-storefront#{suffix}" => ['redirect-map'],
+  }
+  other_redirect_volume_consumers = workloads(documents).reject { |workload| workload.equal?(storefront) }.filter_map do |workload|
+    pod = pod_spec(workload)
+    has_mount = pod_containers(pod).any? do |container|
+      container.fetch('volumeMounts', []).any? { |mount| mount['name'] == 'redirect-map' }
+    end
+    workload.dig('metadata', 'name') if has_mount || pod.fetch('volumes', []).any? { |volume| volume['name'] == 'redirect-map' }
+  end
+  raise 'redirect-map volume must reach only the storefront' unless other_redirect_volume_consumers.empty?
+  runtime_secret = environment == 'test' ? 'plepic-test-runtime-credentials' : 'plepic-runtime-credentials'
+  runtime_secret_volume_consumers = workloads(documents).filter_map do |workload|
+    workload.dig('metadata', 'name') if pod_spec(workload).fetch('volumes', []).any? do |volume|
+      volume.dig('secret', 'secretName') == runtime_secret
+    end
+  end
+  raise 'runtime credentials must never be mounted as a Secret volume' unless runtime_secret_volume_consumers.empty?
+
+  # The expected archive digest is cadenced state, not a tracked placeholder.
+  # It comes from its own one-key ESO projection, explicitly and only on the
+  # suspended import Job. Exact hash equality rejects a literal, an optional
+  # reference, a wrong key, or a second delivery of the same variable. This runs
+  # before the aggregate Secret census so those failures are named precisely.
+  import_expectation_secret = environment == 'test' ?
+    'plepic-test-import-expectation' : 'plepic-import-expectation'
+  digest_consumers = workloads(documents).filter_map do |workload|
+    entries = pod_containers(pod_spec(workload)).flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == 'CATALOGUE_IMPORT_ARCHIVE_SHA256' }
+    end
+    [workload.dig('metadata', 'name'), entries] unless entries.empty?
+  end.to_h
+  raise 'catalogue import archive digest delivery contract mismatch' unless digest_consumers == {
+    "plepic-catalogue-import#{suffix}" => [{
+      'name' => 'CATALOGUE_IMPORT_ARCHIVE_SHA256',
+      'valueFrom' => {
+        'secretKeyRef' => {
+          'name' => import_expectation_secret,
+          'key' => 'CATALOGUE_IMPORT_ARCHIVE_SHA256',
+        },
+      },
+    }],
+  }
+  import_expectation_consumers = workloads(documents).filter_map do |workload|
+    references = pod_containers(pod_spec(workload)).flat_map do |container|
+      container.fetch('env', []).filter_map do |entry|
+        reference = entry.dig('valueFrom', 'secretKeyRef')
+        [entry['name'], reference['key']] if reference&.fetch('name') == import_expectation_secret
+      end
+    end
+    [workload.dig('metadata', 'name'), references] unless references.empty?
+  end.to_h
+  raise 'import-expectation Secret must reach only the catalogue import digest variable' unless
+    import_expectation_consumers == {
+      "plepic-catalogue-import#{suffix}" => [[
+        'CATALOGUE_IMPORT_ARCHIVE_SHA256', 'CATALOGUE_IMPORT_ARCHIVE_SHA256',
+      ]],
+    }
+
   secret_references = Hash.new { |hash, key| hash[key] = [] }
   documents.each do |document|
     next unless (pod = pod_spec(document))
@@ -1241,6 +1358,13 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
       container.fetch('env', []).each do |entry|
         reference = entry.dig('valueFrom', 'secretKeyRef')
         secret_references[reference['name']] << reference['key'] if reference
+      end
+    end
+    pod.fetch('volumes', []).each do |volume|
+      secret = volume['secret']
+      next unless secret
+      secret.fetch('items', []).each do |item|
+        secret_references[secret['secretName']] << item['key']
       end
     end
   end
@@ -1436,6 +1560,8 @@ live_options = {
     'plepic-runtime-credentials' => runtime_keys,
     'plepic-database-admin' => admin_keys,
     'plepic-publishable-key' => ['publishableKey'],
+    'plepic-redirect-map' => ['redirect-map.json'],
+    'plepic-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
   },
   pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
   resources: live_resources,
@@ -1455,6 +1581,8 @@ test_options = {
     'plepic-test-runtime-credentials' => runtime_keys,
     'plepic-test-database-admin' => admin_keys,
     'plepic-test-publishable-key' => ['publishableKey'],
+    'plepic-test-redirect-map' => ['redirect-map.json'],
+    'plepic-test-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
   },
   pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
   resources: test_resources,
@@ -1588,6 +1716,140 @@ assert_mutation_rejected(
   import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
   pod_spec(import_job).fetch('containers').first['envFrom'] =
     [{ 'secretRef' => { 'name' => 'plepic-test-runtime-credentials' } }]
+end
+
+# The backend in `server` mode is the publisher half of a deliberately split
+# topology. Copying the same setting to the worker or either Job is not harmless
+# duplication: it changes the command's runtime mode and leaves no consumer.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'server mode leaked from the backend to the worker',
+  'MEDUSA_WORKER_MODE must be literal server on the backend only'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod_spec(worker).fetch('containers').first.fetch('env') <<
+    { 'name' => 'MEDUSA_WORKER_MODE', 'value' => 'server' }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the redirect map sourced from the runtime credential Secret',
+  'storefront redirect-map Secret volume contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  volume = pod_spec(storefront).fetch('volumes').find { |candidate| candidate['name'] == 'redirect-map' }
+  volume.fetch('secret')['secretName'] = 'plepic-test-runtime-credentials'
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the redirect map Secret exposing every key instead of one projected item',
+  'storefront redirect-map Secret volume contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  volume = pod_spec(storefront).fetch('volumes').find { |candidate| candidate['name'] == 'redirect-map' }
+  volume.fetch('secret').delete('items')
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the redirect map mount made writable',
+  'storefront redirect-map mount contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  mount = pod_spec(storefront).dig('containers', 0, 'volumeMounts')
+    .find { |candidate| candidate['name'] == 'redirect-map' }
+  mount['readOnly'] = false
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the redirect-map Secret copied onto the worker under another volume name',
+  'redirect-map Secret must reach only the storefront volume'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod = pod_spec(worker)
+  pod.fetch('volumes') << {
+    'name' => 'retired-hosts',
+    'secret' => {
+      'secretName' => 'plepic-test-redirect-map',
+      'items' => [{ 'key' => 'redirect-map.json', 'path' => 'redirect-map.json' }],
+    },
+  }
+  pod.dig('containers', 0, 'volumeMounts') << {
+    'name' => 'retired-hosts', 'mountPath' => '/var/run/plepic/retired-hosts', 'readOnly' => true,
+  }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the test redirect map reference left unsuffixed',
+  'storefront redirect-map Secret volume contract mismatch'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  volume = pod_spec(storefront).fetch('volumes').find { |candidate| candidate['name'] == 'redirect-map' }
+  volume.fetch('secret')['secretName'] = 'plepic-redirect-map'
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the catalogue import archive digest embedded as a literal',
+  'catalogue import archive digest delivery contract mismatch'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  entry = pod_spec(import_job).dig('containers', 0, 'env')
+    .find { |candidate| candidate['name'] == 'CATALOGUE_IMPORT_ARCHIVE_SHA256' }
+  entry.delete('valueFrom')
+  entry['value'] = '0' * 64
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the catalogue import archive digest read from the runtime Secret',
+  'catalogue import archive digest delivery contract mismatch'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  entry = pod_spec(import_job).dig('containers', 0, 'env')
+    .find { |candidate| candidate['name'] == 'CATALOGUE_IMPORT_ARCHIVE_SHA256' }
+  entry.dig('valueFrom', 'secretKeyRef')['name'] = 'plepic-test-runtime-credentials'
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the test import-expectation reference left unsuffixed',
+  'catalogue import archive digest delivery contract mismatch'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  entry = pod_spec(import_job).dig('containers', 0, 'env')
+    .find { |candidate| candidate['name'] == 'CATALOGUE_IMPORT_ARCHIVE_SHA256' }
+  entry.dig('valueFrom', 'secretKeyRef')['name'] = 'plepic-import-expectation'
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the import-expectation Secret consumed by the worker under another variable name',
+  'import-expectation Secret must reach only the catalogue import digest variable'
+) do |documents|
+  worker = resource(documents, 'Deployment', 'plepic-worker-test')
+  pod_spec(worker).dig('containers', 0, 'env') << {
+    'name' => 'UNUSED_IMPORT_EXPECTATION',
+    'valueFrom' => {
+      'secretKeyRef' => {
+        'name' => 'plepic-test-import-expectation',
+        'key' => 'CATALOGUE_IMPORT_ARCHIVE_SHA256',
+      },
+    },
+  }
+end
+
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the import expectation Secret pulled in wholesale through envFrom',
+  'must not deliver environment through envFrom'
+) do |documents|
+  import_job = resource(documents, 'Job', 'plepic-catalogue-import-test')
+  pod_spec(import_job).fetch('containers').first['envFrom'] =
+    [{ 'secretRef' => { 'name' => 'plepic-test-import-expectation' } }]
 end
 
 # The state the catalogue import shipped in: no environment identity at all.
