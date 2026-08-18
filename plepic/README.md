@@ -285,3 +285,9 @@ network boundaries, Secret names and keys, digest-pinned images and their
 census, and the exact external ports. These manifests describe desired state
 only; their presence in this repository does not claim that either environment
 has been deployed.
+
+`plepic-assets` shares sync wave `0` with the backend and worker Deployments
+that mount it. K3s `local-path` uses `WaitForFirstConsumer`; placing the claim in
+an earlier blocking wave would prevent Argo CD from creating a consumer and
+leave the claim Pending indefinitely. PostgreSQL and Redis likewise keep each
+claim in the same wave as its consuming StatefulSet.
