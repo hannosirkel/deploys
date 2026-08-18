@@ -55,6 +55,13 @@ a sync gate that blocks every wave behind it. No `REDIS_URL` is supplied here:
 the three parts are what these manifests project and the application composes
 the URL, the same split as the five `DATABASE_*` parts.
 
+Redis keeps the `@dangerous` command category denied. The sole exception is
+`INFO`, re-allowed after that category deny because Medusa's Redis locking
+provider queries it during module initialization. The ordering
+`+@all -@dangerous +info` is intentional: moving `+info` before the category
+deny would revoke it again, while removing `-@dangerous` would unnecessarily
+widen the Redis command surface.
+
 `SITE_BASE_URL`, `SITE_CANONICAL_HOST`, and `SITE_TEST_HOSTNAMES` are declared on
 the storefront in both environments with reserved-name placeholders, and the real
 per-environment hostnames are injected from Orange. They are declared rather than

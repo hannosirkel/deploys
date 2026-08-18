@@ -745,7 +745,11 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'Redis AOF contract mismatch' unless redis_config.include?("appendonly yes\n") && redis_config.include?("appendfsync everysec\n")
   raise 'Redis ACL file is required' unless redis_config.include?('aclfile /run/redis/users.acl')
   redis_args = pod_spec(redis).dig('containers', 0, 'args').join("\n")
-  raise 'Redis dangerous commands must be denied by ACL' unless redis_args.include?('-@dangerous')
+  redis_acl_line = redis_args.lines
+    .find { |line| line.include?("printf 'user default on >%s") }
+    &.strip
+  expected_redis_acl_line = %q{printf 'user default on >%s ~* &* +@all -@dangerous +info\n' "$REDIS_PASSWORD" > /run/redis/users.acl}
+  raise 'Redis ACL least-privilege contract mismatch' unless redis_acl_line == expected_redis_acl_line
   raise 'deprecated Redis rename-command is forbidden' if redis_config.include?('rename-command') || redis_args.include?('rename-command')
   postgresql_image = pod_spec(postgresql).dig('containers', 0, 'image')
   redis_image = pod_spec(redis).dig('containers', 0, 'image')
