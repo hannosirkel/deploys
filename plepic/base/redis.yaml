@@ -64,7 +64,7 @@ spec:
           args:
             - |
               umask 077
-              printf 'user default on >%s ~* &* +@all -@dangerous\n' "$REDIS_PASSWORD" > /run/redis/users.acl
+              printf 'user default on >%s ~* &* +@all -@dangerous +info\n' "$REDIS_PASSWORD" > /run/redis/users.acl
               exec redis-server /etc/redis/redis.conf
           env:
             - name: REDIS_PASSWORD
