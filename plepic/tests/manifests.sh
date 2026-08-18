@@ -683,6 +683,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     'argocd.argoproj.io/sync-options' => 'Force=true,Replace=true',
   }
 
+  assets = resource(documents, 'PersistentVolumeClaim', "plepic-assets#{suffix}")
   wave_minus_twenty = documents.select do |document|
     document.dig('metadata', 'annotations', 'argocd.argoproj.io/sync-wave') == '-20'
   end
@@ -691,7 +692,8 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     name = document.dig('metadata', 'name')
     expected_wave = if document.equal?(predeploy)
       '-10'
-    elsif document.equal?(import) || document['kind'] == 'Deployment' ||
+    elsif document.equal?(import) || document.equal?(assets) ||
+          document['kind'] == 'Deployment' ||
           (document['kind'] == 'Service' && ["plepic-backend#{suffix}", "plepic-storefront#{suffix}"].include?(name))
       '0'
     else
