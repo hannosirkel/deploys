@@ -671,11 +671,34 @@ def assert_network_contract(documents, suffix)
 
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
   raise 'HTTPS egress policy type mismatch' unless https.dig('spec', 'policyTypes') == ['Egress']
+  # `backup` is admitted here and `recovery` is not, and the difference is the
+  # whole of what this list is for.
+  #
+  # Orange's `backups` Application renders two backup CronJobs into each Plepic
+  # namespace — one for PostgreSQL, one for the assets PVC — all labelled
+  # `app.kubernetes.io/component: backup`; they dump their source and then
+  # upload to Backblaze B2 over TCP 443. Egress here is CIDR-only, so reaching
+  # B2 means being in this selector. Without it the Pods connected to the
+  # database — `allow-postgresql-egress` already names them — and then failed at
+  # the upload, which surfaces as a credential or bucket error at the first
+  # backup cycle rather than as a policy one.
+  #
+  # `recovery` stays out because the restore path never speaks to B2 from the
+  # cluster. `roles/recovery/tasks/download.yml` lists, downloads and decrypts
+  # the object on the Ansible controller (`delegate_to: localhost`), and
+  # `roles/recovery/templates/postgresql-restore.yaml.j2` mounts the result into
+  # the Job read-only from a `hostPath`. A restore Pod therefore needs 5432 and
+  # nothing else, and this rule's peer is `0.0.0.0/0`, so it stays out by plain
+  # least privilege.
+  #
+  # Exact set equality, not membership, for the same reason: this rule egresses
+  # to `0.0.0.0/0`, so every name added to it gains general outbound HTTPS, and
+  # a membership test would let a later author add one silently.
   raise 'HTTPS workload selector mismatch' unless https.dig('spec', 'podSelector') == {
     'matchExpressions' => [{
       'key' => 'app.kubernetes.io/component',
       'operator' => 'In',
-      'values' => %w[backend worker storefront predeploy catalogue-import],
+      'values' => %w[backend worker storefront predeploy catalogue-import backup],
     }],
   }
   raise 'HTTPS broad egress mismatch' unless https.dig('spec', 'egress') == [{
@@ -2184,6 +2207,39 @@ assert_mutation_rejected(
 ) do |documents|
   redis_egress = resource(documents, 'NetworkPolicy', 'allow-redis-egress-test')
   redis_egress.dig('spec', 'podSelector', 'matchExpressions').first['values'] = %w[backend worker]
+end
+
+# The exact state this repository shipped in before the `backup` component was
+# added: every workload that talks to the Internet admitted, and the one Job
+# whose entire purpose is to upload off-cluster left out. Nothing else notices —
+# the backup Jobs are rendered by Orange and appear in no document here, so the
+# only trace of them in this repository is the two policy selectors that name
+# them, and `allow-postgresql-egress` already named this one.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'HTTPS egress that does not admit the backup Jobs',
+  'HTTPS workload selector mismatch'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'podSelector', 'matchExpressions').first['values'] =
+    %w[backend worker storefront predeploy catalogue-import]
+end
+
+# The other direction, and the reason the assertion is written as set equality.
+#
+# `recovery` is the most plausible name a later author adds here, because it
+# already sits beside `backup` in `allow-postgresql-egress` and the symmetry
+# looks like an oversight. It is not: the restore object is fetched and
+# decrypted on the controller and mounted into the Job from a hostPath, so a
+# restore Pod has no reason to reach the Internet, and this rule's peer is
+# `0.0.0.0/0`. A membership test would accept this mutation in silence.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'HTTPS egress widened to the restore Jobs',
+  'HTTPS workload selector mismatch'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'podSelector', 'matchExpressions').first['values'] << 'recovery'
 end
 
 # A Job missing REDIS_PASSWORD outright — the state both Jobs shipped in.

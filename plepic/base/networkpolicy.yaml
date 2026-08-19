@@ -182,11 +182,19 @@ metadata:
   name: allow-https-egress
   annotations: {argocd.argoproj.io/sync-wave: "-20"}
 spec:
+  # `backup` is here and `recovery` is deliberately not. Orange's `backups`
+  # Application renders backup Jobs into these namespaces labelled
+  # `app.kubernetes.io/component: backup`; they dump PostgreSQL — which
+  # `allow-postgresql-egress` already admits — and then upload to Backblaze B2
+  # over TCP 443, which only this rule can allow. The restore path fetches and
+  # decrypts its object on the Ansible controller and mounts it into the Job
+  # from a hostPath, so a `recovery` Pod needs 5432 and nothing else, and this
+  # peer is `0.0.0.0/0`.
   podSelector:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [backend, worker, storefront, predeploy, catalogue-import]
+        values: [backend, worker, storefront, predeploy, catalogue-import, backup]
   policyTypes: [Egress]
   egress:
     - to:

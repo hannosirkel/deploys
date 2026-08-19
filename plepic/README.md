@@ -55,6 +55,27 @@ a sync gate that blocks every wave behind it. No `REDIS_URL` is supplied here:
 the three parts are what these manifests project and the application composes
 the URL, the same split as the five `DATABASE_*` parts.
 
+Two components named in the NetworkPolicies are rendered by **Orange**, not by
+this root: `backup` and `recovery`. The `backups` Argo CD Application renders
+two backup CronJobs into each Plepic namespace — one for PostgreSQL and one for
+the assets PVC — and the recovery role renders a restore Job into it; both
+namespaces default-deny in either direction, so the policies here are what admit
+those Pods, and the selectors naming them are a cross-repository contract with
+`argocd_backup_jobs` and `recovery_targets`. One label covers all four backup
+targets. `allow-postgresql-ingress` and `allow-postgresql-egress` admit both
+components on 5432. `allow-https-egress` additionally admits **`backup`** on
+443, because the backup Pods upload their archives to Backblaze B2 and egress
+here is CIDR-only — a Pod outside that selector reaches the database and then
+fails at the upload, which looks like a credential or bucket fault at the first
+backup cycle rather than a policy one. **`recovery` is deliberately absent from
+it.** The restore object is listed, downloaded, and decrypted on the Ansible
+controller and mounted into the Job read-only from a `hostPath`, so no
+in-cluster restore path fetches from B2 and a restore Pod has no reason to reach
+the Internet; this rule's peer is `0.0.0.0/0`, so `recovery` stays out by plain
+least privilege. The contract test asserts that selector as an exact set in both
+overlays and mutates it in both directions, so neither the omission nor a later
+widening passes in silence.
+
 Redis keeps the `@dangerous` command category denied. The sole exception is
 `INFO`, re-allowed after that category deny because Medusa's Redis locking
 provider queries it during module initialization. The ordering
