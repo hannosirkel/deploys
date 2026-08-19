@@ -62,6 +62,42 @@ provider queries it during module initialization. The ordering
 deny would revoke it again, while removing `-@dangerous` would unnecessarily
 widen the Redis command surface.
 
+The predeploy Job mounts one `emptyDir` at **ten** paths inside the image, each
+with its own `subPath` and each `readOnly`. `medusa db:migrate` runs Mikro-ORM's
+Migrator, and `Migrator.up()` calls `ensureMigrationsDirExists()` at least once
+for every module **and** every provider it loads — each gets its own migrations
+directory, derived from its own discovery path, which is what makes seven of the
+ten entries providers rather than modules. It is more often than once each:
+`migrationScripts` in `@medusajs/modules-sdk`'s `load-internal.js` accumulates
+across loaded services and the build loop re-walks the whole accumulator on every
+pass, so a module with one provider builds three migration functions rather than
+two. The count does not matter here; what matters is that the call does not
+tolerate a missing directory, it *creates* it. Every package in this application's module set that ships no
+`dist/migrations` therefore failed against `readOnlyRootFilesystem: true`, and
+the Job exited 1 *after* 176 migrations across 121 tables had already applied.
+An empty directory is the whole requirement — the migrator globs it, finds
+nothing, and reports the module up to date — and the mounts are read-only
+because `db:migrate` never writes there; only `db:generate` does, and that never
+runs in-cluster.
+
+Relaxing `readOnlyRootFilesystem` would make the same symptom disappear and is
+rejected: this Job holds the admin, database, Stripe and JWT secrets and is the
+worst container in the deployment to soften. Only this Job needs the
+directories, because only this Job invokes the Migrator; the two Deployments and
+the catalogue-import Job run the same image and do not, and `tests/manifests.sh`
+refuses the mounts anywhere else.
+
+**The list is coupled to the application's module and provider set, not to the
+error log.** The log names only the *first* missing directory per module, so
+`locking` and `file` each hide a second one, and `MODULE: notification` is not
+`notification-local`: `backend/medusa-config.ts` loads
+`notificationModule(runtime.smtp)`, whose provider resolves to
+`./src/notifications` — the application's own SMTP provider, which ships no
+`migrations` directory and lives under `/app` rather than `/node_modules`.
+Adding a module or provider whose package ships no migrations directory
+reproduces the failure and needs another entry in both `base/predeploy-job.yaml`
+and `tests/manifests.sh`.
+
 `SITE_BASE_URL`, `SITE_CANONICAL_HOST`, and `SITE_TEST_HOSTNAMES` are declared on
 the storefront in both environments with reserved-name placeholders, and the real
 per-environment hostnames are injected from Orange. They are declared rather than

@@ -416,6 +416,115 @@ def assert_pod_hardening(document)
   end
 end
 
+# The one volume that gives `medusa db:migrate` the directories the Migrator
+# insists on, and the ten places it is mounted.
+#
+# Mikro-ORM's `Migrator.up()` calls `ensureMigrationsDirExists()` at least once
+# for every module *and* every provider it loads — each gets its own migrations
+# directory, derived from its own discovery path, which is why seven of the ten
+# entries below are providers rather than modules. It is more often than once
+# each: `migrationScripts` in `@medusajs/modules-sdk`'s `load-internal.js`
+# accumulates across loaded services and the build loop re-walks the whole
+# accumulator each pass. The count is not what matters here.
+#
+# That call does not tolerate a missing
+# directory — it *creates* it. Every package in this application's module set
+# that ships no `dist/migrations` therefore failed against
+# `readOnlyRootFilesystem: true`, and the predeploy Job exited 1 *after* 176
+# migrations across 121 tables had already applied. An empty directory is the
+# whole requirement: the migrator globs it, finds nothing, and reports the module
+# up to date. The mounts are `readOnly` because `db:migrate` never writes there —
+# only `db:generate` does, and that never runs in-cluster.
+#
+# **This list is coupled to the application's module and provider set, not to the
+# error log.** The log names only the *first* missing directory per module, so
+# `locking` and `file` each hide a second one, and `MODULE: notification` is not
+# `notification-local`: `backend/medusa-config.ts` loads
+# `notificationModule(runtime.smtp)`, whose provider resolves to
+# `./src/notifications` — the application's own SMTP provider, which ships no
+# `migrations` directory and lives under `/app`, not `/node_modules`. Adding a
+# provider or module whose package ships no migrations directory reproduces the
+# failure and needs another entry here and in `plepic/base/predeploy-job.yaml`.
+MIGRATIONS_VOLUME = 'module-migrations'.freeze
+MIGRATIONS_DIRECTORIES = [
+  ['payment-stripe', '/node_modules/@medusajs/payment-stripe/dist/migrations'],
+  ['auth-emailpass', '/node_modules/@medusajs/auth-emailpass/dist/migrations'],
+  ['fulfillment-manual', '/node_modules/@medusajs/fulfillment-manual/dist/migrations'],
+  ['cache-inmemory', '/node_modules/@medusajs/cache-inmemory/dist/migrations'],
+  ['event-bus-redis', '/node_modules/@medusajs/event-bus-redis/dist/migrations'],
+  ['locking', '/node_modules/@medusajs/locking/dist/migrations'],
+  ['locking-redis', '/node_modules/@medusajs/locking-redis/dist/migrations'],
+  ['file', '/node_modules/@medusajs/file/dist/migrations'],
+  ['file-local', '/node_modules/@medusajs/file-local/dist/migrations'],
+  ['notifications', '/app/src/notifications/migrations'],
+].freeze
+
+# Controls on the table itself, before anything is compared against it. One
+# `emptyDir` reaching ten paths only works if every mount takes a distinct
+# `subPath`: two mounts sharing one would give the migrator two names for one
+# directory, and a duplicate written here would be invisible to an equality test
+# that compared the manifest to this same list.
+raise 'migration directory subPaths must be distinct' unless
+  MIGRATIONS_DIRECTORIES.map(&:first).uniq.length == MIGRATIONS_DIRECTORIES.length
+raise 'migration directory mount paths must be distinct' unless
+  MIGRATIONS_DIRECTORIES.map(&:last).uniq.length == MIGRATIONS_DIRECTORIES.length
+
+def assert_migration_directories(documents, predeploy)
+  pod = pod_spec(predeploy)
+  expected_mounts = MIGRATIONS_DIRECTORIES.map do |sub_path, mount_path|
+    { 'name' => MIGRATIONS_VOLUME, 'mountPath' => mount_path, 'subPath' => sub_path, 'readOnly' => true }
+  end
+  # Selected by volume name *or* by mount path, so the comparison is two-sided: a
+  # missing, writable, misdirected or subPath-less entry fails it, and so does a
+  # second volume quietly taking over one of the ten paths while the named ones
+  # still look right.
+  migration_paths = MIGRATIONS_DIRECTORIES.map(&:last)
+  actual_mounts = pod_containers(pod).flat_map do |container|
+    container.fetch('volumeMounts', []).select do |mount|
+      mount['name'] == MIGRATIONS_VOLUME || migration_paths.include?(mount['mountPath'])
+    end
+  end
+  raise 'predeploy module migrations mount contract mismatch' unless actual_mounts == expected_mounts
+
+  migration_volumes = pod.fetch('volumes', []).select { |volume| volume['name'] == MIGRATIONS_VOLUME }
+  raise 'predeploy module migrations volume contract mismatch' unless
+    migration_volumes == [{ 'name' => MIGRATIONS_VOLUME, 'emptyDir' => {} }]
+
+  # Relaxing the root filesystem is the *other* way to make this failure
+  # disappear, and it is rejected: this Job holds the admin, database, Stripe and
+  # JWT secrets and is the worst container in the deployment to soften. Nothing
+  # above would notice — ten mounted directories and a writable root satisfy
+  # every assertion in this method — so the coupling is stated here where the
+  # remedy is, rather than left implicit.
+  #
+  # assert_pod_hardening already requires this of every container and runs
+  # first, so this restatement is not the guard that fires; a mutation opening
+  # the root filesystem is refused there, by name, before reaching here. It is
+  # deliberately redundant: the hardening loop is generic and could be narrowed
+  # for some unrelated workload, and this contract must not lose its premise
+  # when that happens.
+  pod_containers(pod).each do |container|
+    raise 'the predeploy root filesystem must stay read-only' unless
+      container.dig('securityContext', 'readOnlyRootFilesystem') == true
+  end
+
+  # Only the predeploy Job invokes the Migrator. The two Deployments and the
+  # import Job run the same image and never call it, so they need none of this,
+  # and spreading it to them by copy-paste would widen a mount set nobody there
+  # reads.
+  other_consumers = workloads(documents).reject { |workload| workload.equal?(predeploy) }.filter_map do |workload|
+    other_pod = pod_spec(workload)
+    has_mount = pod_containers(other_pod).any? do |container|
+      container.fetch('volumeMounts', []).any? do |mount|
+        mount['name'] == MIGRATIONS_VOLUME || migration_paths.include?(mount['mountPath'])
+      end
+    end
+    has_volume = other_pod.fetch('volumes', []).any? { |volume| volume['name'] == MIGRATIONS_VOLUME }
+    workload.dig('metadata', 'name') if has_mount || has_volume
+  end
+  raise 'the module migrations volume must reach only the predeploy Job' unless other_consumers.empty?
+end
+
 def assert_network_contract(documents, suffix)
   expected_policy_names = %w[
     default-deny
@@ -674,6 +783,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   }
   raise 'migration Sync-hook gate mismatch' unless predeploy.dig('metadata', 'annotations') == expected_hook
   raise 'predeploy token exception must not return' unless pod_spec(predeploy)['automountServiceAccountToken'] == false
+  assert_migration_directories(documents, predeploy)
 
   import = resource(documents, 'Job', "plepic-catalogue-import#{suffix}")
   raise 'catalogue import must stay suspended' unless import.dig('spec', 'suspend') == true
@@ -1735,6 +1845,92 @@ assert_mutation_rejected(
   worker = resource(documents, 'Deployment', 'plepic-worker-test')
   pod_spec(worker).fetch('containers').first.fetch('env') <<
     { 'name' => 'MEDUSA_WORKER_MODE', 'value' => 'server' }
+end
+
+# The failure mode the ten paths exist for, in the form it will actually recur:
+# a list shortened to what the error log printed. `locking` is one of the two
+# entries the log hides behind an earlier sibling, so dropping it is exactly the
+# edit a future reader working from the log would make.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a module migrations directory dropped from the mount set',
+  'predeploy module migrations mount contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
+    .reject! { |mount| mount['mountPath'] == '/node_modules/@medusajs/locking/dist/migrations' }
+end
+
+# Writable directories inside a package tree, for a command that only reads
+# them. `db:generate` is the one that writes migrations and it never runs
+# in-cluster.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a module migrations mount made writable',
+  'predeploy module migrations mount contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
+    .find { |mount| mount['mountPath'] == '/app/src/notifications/migrations' }['readOnly'] = false
+end
+
+# Every mount pointed at the same `emptyDir` root. Nothing about the pod's shape
+# objects — one volume, ten paths, all read-only — and the migrator would still
+# find ten empty directories today. It is refused because they are then one
+# directory under ten names, so the first module to ship migrations into its own
+# subtree would find another module's.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the module migrations mounts collapsed onto one shared subPath',
+  'predeploy module migrations mount contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts').each do |mount|
+    mount.delete('subPath') if mount['name'] == 'module-migrations'
+  end
+end
+
+# A backing store that outlives the Job. These directories are scratch by
+# definition — they exist so a glob finds nothing — and backing them with the
+# assets PVC would put ten empty directories in the volume that serves media and
+# stages imports.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the module migrations volume backed by the assets PVC',
+  'predeploy module migrations volume contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  volume = pod_spec(predeploy).fetch('volumes').find { |candidate| candidate['name'] == 'module-migrations' }
+  volume.delete('emptyDir')
+  volume['persistentVolumeClaim'] = { 'claimName' => 'plepic-assets-test' }
+end
+
+# The copy-paste. The worker runs the same image and never calls the Migrator,
+# so this is inert at best; the point is that it stays refused rather than
+# becoming the shape every workload drifts towards.
+#
+# Deep-copied rather than aliased. Appending the predeploy Job's own hashes to
+# the worker would make one object appear in two documents, which
+# `YAML.dump_stream` writes as an anchor in the first and an alias in the second
+# — and anchors do not cross document boundaries, so the reload fails on a
+# dangling alias before any assertion here is reached.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the module migrations mounts copied onto the worker',
+  'the module migrations volume must reach only the predeploy Job'
+) do |documents|
+  predeploy_pod = pod_spec(resource(documents, 'Job', 'plepic-predeploy-test'))
+  worker_pod = pod_spec(resource(documents, 'Deployment', 'plepic-worker-test'))
+  copied = lambda do |value|
+    Marshal.load(Marshal.dump(value))
+  end
+  worker_pod.fetch('volumes') << copied.call(
+    predeploy_pod.fetch('volumes').find { |volume| volume['name'] == 'module-migrations' }
+  )
+  worker_pod.dig('containers', 0, 'volumeMounts').concat(copied.call(
+    predeploy_pod.dig('containers', 0, 'volumeMounts')
+      .select { |mount| mount['name'] == 'module-migrations' }
+  ))
 end
 
 assert_mutation_rejected(
