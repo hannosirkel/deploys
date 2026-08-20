@@ -347,6 +347,35 @@ MERCHANT_STOREFRONT_DISCLOSURES = {
   'MERCHANT_PHONE_NUMBER' => '+372 51 35463',
 }.freeze
 
+# The four external destinations the site's own copy links to, and the one
+# workload that reads them.
+#
+# `content/routes.ts` declares these as *ids* because a content file may carry
+# no absolute URL; a deployment puts the address behind the id. That indirection
+# is the reason they are here and it is also how they went missing: the
+# storefront resolved every unconfigured id to `null`, `link-target.ts` rendered
+# the label as inert text rather than an anchor, and no manifest in this
+# repository declared any of them. So the served site showed "Instagram",
+# "Facebook" and "See the campaign" as grey text nobody could click, on every
+# page, until the operator clicked one on 2026-08-20.
+#
+# That is the same failure shape as MERCHANT_STOREFRONT_DISCLOSURES above and it
+# is guarded the same way: an absent variable degrades quietly by design, so
+# only an assertion in this file can tell the difference between "deliberately
+# unconfigured" and "nobody ever declared it".
+#
+# In the base rather than the overlays, and asserted identical across both,
+# because these do not differ between environments — live and test link to the
+# same campaign and the same profiles. Storefront only: no backend-image
+# workload reads an external destination.
+EXTERNAL_DESTINATIONS = {
+  'EXTERNAL_URL_KICKSTARTER_CAMPAIGN' =>
+    'https://www.kickstarter.com/projects/hugphones/lunar-base-a-moon-colonization-base-building-card-game',
+  'EXTERNAL_URL_INSTAGRAM' => 'https://www.instagram.com/lunarbasegame/',
+  'EXTERNAL_URL_FACEBOOK' => 'https://www.facebook.com/lunarbasegame/',
+  'EXTERNAL_URL_ORIGIN_STORY' => 'https://medium.com/lunar-base/lunar-base-origin-story-74fecca60e61',
+}.freeze
+
 ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
 
 # RFC 2606 and RFC 6761 reserve these names precisely so documentation and
@@ -1386,6 +1415,31 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'the merchant disclosures only the storefront reads must reach only it' unless
     merchant_disclosure_consumers == {
       "plepic-storefront#{suffix}" => MERCHANT_STOREFRONT_DISCLOSURES.keys.sort,
+    }
+
+  # The four external destinations, held to the same shape as the disclosures
+  # above: exactly once across every container of the storefront pod, as a
+  # literal rather than a `valueFrom` (none is a credential, and a public URL
+  # delivered through ESO would be the wrong path), and equal to the table.
+  EXTERNAL_DESTINATIONS.each do |name, expected|
+    entries = storefront_containers.flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == name }
+    end
+    raise "storefront must declare #{name} exactly once" unless entries.length == 1
+    raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
+  end
+
+  # And only the storefront declares them, for the reason the merchant census
+  # above gives: a copy on a backend-image workload reads nothing and becomes
+  # the place a later edit changes instead of this one.
+  external_destination_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    declared = EXTERNAL_DESTINATIONS.keys.select { |name| env_present?(containers, name) }
+    [workload.dig('metadata', 'name'), declared.sort] unless declared.empty?
+  end.to_h
+  raise 'the external destinations only the storefront reads must reach only it' unless
+    external_destination_consumers == {
+      "plepic-storefront#{suffix}" => EXTERNAL_DESTINATIONS.keys.sort,
     }
 
   # Three properties of the option table itself, and the reason they are sited
@@ -3046,6 +3100,50 @@ assert_mutation_rejected(
     'securityContext' => HARDENED_SIDECAR_SECURITY.dup,
     'resources' => HARDENED_SIDECAR_RESOURCES.dup,
   }
+end
+
+# A storefront shipping without the campaign URL.
+#
+# The mutation this exists for is not malice, it is tidying: the four external
+# destinations look optional -- the storefront starts without them and every
+# page still renders 200 -- so they are exactly the block a later editor
+# removes as unused. The deployed result is the defect the operator reported,
+# a proof strip whose "See the campaign" is grey text.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a storefront shipping without the campaign URL',
+  'storefront must declare EXTERNAL_URL_KICKSTARTER_CAMPAIGN exactly once'
+) do |documents|
+  storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
+  storefront.fetch('env').reject! { |entry| entry['name'] == 'EXTERNAL_URL_KICKSTARTER_CAMPAIGN' }
+end
+
+# The same destination pointed somewhere else. A URL is plausible on sight in a
+# way a missing register code is not, so equality against the table is the only
+# thing standing between a review pass and the footer linking a profile nobody
+# chose.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a social profile pointed at another account',
+  'storefront EXTERNAL_URL_INSTAGRAM mismatch'
+) do |documents|
+  storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
+  storefront.fetch('env').each do |entry|
+    entry['value'] = 'https://www.instagram.com/someone-else/' if entry['name'] == 'EXTERNAL_URL_INSTAGRAM'
+  end
+end
+
+# The four copied onto a backend-image workload. Every value assertion is
+# satisfied; only the consumer census refuses it.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the external destinations copied onto the backend',
+  'the external destinations only the storefront reads must reach only it'
+) do |documents|
+  backend = pod_spec(resource(documents, 'Deployment', 'plepic-backend-test')).fetch('containers').first
+  EXTERNAL_DESTINATIONS.each do |name, value|
+    backend.fetch('env') << { 'name' => name, 'value' => value }
+  end
 end
 
 # The three copied onto a backend-image workload, at the correct values. Every

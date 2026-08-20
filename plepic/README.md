@@ -315,6 +315,7 @@ contract tests refuse *that* being replaced by a reserved-looking substitute.
 | `MERCHANT_REGISTRATION_NUMBER`, `MERCHANT_VAT_NUMBER`, `MERCHANT_PHONE_NUMBER` | **nothing — already supplied here**, in `base/storefront.yaml`, at their real values. These are legally required disclosures rather than private configuration; see the merchant-identity section above. They were previously declared in no manifest at all, which rendered each as a named visible gap plus a page-level incompleteness notice on a page that still returned 200. Task 6 must not override them |
 | `MERCHANT_LEGAL_NAME`, `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` | **nothing — already supplied here**, in the base, for the storefront and every backend-image workload. Task 6 must not override them |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional. Absent renders one link fewer and nothing else — no gap marker, no notice. Supply it, but do not hold a release for it |
+| `EXTERNAL_URL_KICKSTARTER_CAMPAIGN`, `EXTERNAL_URL_INSTAGRAM`, `EXTERNAL_URL_FACEBOOK`, `EXTERNAL_URL_ORIGIN_STORY` | **nothing — already supplied here**, in `base/storefront.yaml`. These are the destinations the site's own copy links to, identical in both environments. Absent, each degrades quietly: the label renders as inert text, which is what the served site did on every page until 2026-08-20. Task 6 must not override them |
 | `REDIRECT_MAP_PATH` | **already supplied here** as `/var/run/plepic/redirect-map/redirect-map.json`. The file is projected read-only from exactly the `redirect-map.json` key of `plepic-redirect-map` |
 
 *Storefront, test namespace `plepic-test`:*
@@ -327,6 +328,7 @@ contract tests refuse *that* being replaced by a reserved-looking substitute.
 | `ANALYTICS_MEASUREMENT_ID` | **must not be supplied.** One GA property exists with no test data stream, and the test environment has no analytics at all. Absent is the required behaviour, not an omission to be tidied |
 | all seven `MERCHANT_*` | **nothing.** The test environment inherits the base and renders the same imprint live will, which is the only version of that page worth checking before it is public |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional, as live |
+| the four other `EXTERNAL_URL_*` | **nothing.** Inherited from the base, at the same values live serves — one campaign, one pair of profiles, one origin story |
 | `REDIRECT_MAP_PATH` | the same literal path and the same map content as live, projected from `plepic-test-redirect-map`. Supplying it in test makes the retired-domain redirects verifiable before public routing exists |
 
 *Catalogue-import Job, both namespaces:*
