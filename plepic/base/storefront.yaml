@@ -105,6 +105,31 @@ spec:
             - {name: MERCHANT_REGISTRATION_NUMBER, value: "14663721"}
             - {name: MERCHANT_VAT_NUMBER, value: EE102137075}
             - {name: MERCHANT_PHONE_NUMBER, value: "+372 51 35463"}
+            # The four external destinations the site's own copy links to: the
+            # Kickstarter campaign in the homepage proof strip, the two social
+            # profiles in the footer, and the published origin story beside the
+            # publisher story.
+            #
+            # They are configuration for the same reason the MERCHANT_* set is
+            # -- `content/` may carry no absolute URL, so the copy holds only
+            # the external-target id -- and not because they differ between
+            # environments. They do not, so they sit in the base with one value
+            # each, and the overlays override none of them.
+            #
+            # Without them the storefront resolves each id to `null` and
+            # `link-target.ts` renders the label as inert text. That is the
+            # correct degradation and it is not hypothetical: it is what every
+            # deployment did until 2026-08-20, so "Instagram", "Facebook" and
+            # "See the campaign" were grey text nobody could click on every
+            # page of the served site.
+            #
+            # Storefront only. No backend-image workload reads an external
+            # destination, so a copy on one would be a declaration nothing
+            # reads.
+            - {name: EXTERNAL_URL_KICKSTARTER_CAMPAIGN, value: "https://www.kickstarter.com/projects/hugphones/lunar-base-a-moon-colonization-base-building-card-game"}
+            - {name: EXTERNAL_URL_INSTAGRAM, value: "https://www.instagram.com/lunarbasegame/"}
+            - {name: EXTERNAL_URL_FACEBOOK, value: "https://www.facebook.com/lunarbasegame/"}
+            - {name: EXTERNAL_URL_ORIGIN_STORY, value: "https://medium.com/lunar-base/lunar-base-origin-story-74fecca60e61"}
             # MEDUSA_PUBLISHABLE_API_KEY, not MEDUSA_PUBLISHABLE_KEY. The
             # storefront reads the former —
             # `storefront/src/config/runtime-env.ts`'s RUNTIME_ENV_VARS,
