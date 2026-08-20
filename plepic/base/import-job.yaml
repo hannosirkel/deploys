@@ -89,10 +89,19 @@ spec:
             - {name: SMTP_PORT, value: "587"}
             - {name: SMTP_ENVELOPE_FROM, value: orders@example.com}
             - {name: CONTACT_MAIL_RECIPIENT, value: contact@example.com}
-            - {name: MERCHANT_LEGAL_NAME, value: "Example Games OÜ"}
-            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Example Street 1, Tallinn"}
-            - {name: MERCHANT_CONTACT_ADDRESS, value: legal@example.com}
-            - {name: MERCHANT_RETURN_ADDRESS, value: "Return Street 2, Tallinn"}
+            # The merchant's registered identity, which is a published legal
+            # disclosure rather than a placeholder. See `README.md` and the
+            # MERCHANT_IDENTITY block in `tests/manifests.sh`: Article 6(1) CRD
+            # and VÕS § 54¹ oblige the trader to publish these, so there is one
+            # correct value per field, it is the same in every environment, and
+            # the test overlay deliberately no longer overrides it. The reserved
+            # placeholders above it — the SMTP host, the envelope sender, the
+            # contact recipient — stay reserved and are still per-environment
+            # configuration Orange supplies.
+            - {name: MERCHANT_LEGAL_NAME, value: "Plepic Games OÜ"}
+            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
+            - {name: MERCHANT_CONTACT_ADDRESS, value: info@plepicgames.com}
+            - {name: MERCHANT_RETURN_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
             - name: SMTP_USERNAME
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_USERNAME}}
             - name: SMTP_PASSWORD

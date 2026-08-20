@@ -63,10 +63,48 @@ spec:
             # difference visible in a diff, not a presence difference.
             - {name: SITE_TEST_HOSTNAMES, value: ""}
             - {name: MEDUSA_BACKEND_URL, value: "http://plepic-backend:9000"}
-            - {name: MERCHANT_LEGAL_NAME, value: "Example Games OÜ"}
-            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Example Street 1, Tallinn"}
-            - {name: MERCHANT_CONTACT_ADDRESS, value: legal@example.com}
-            - {name: MERCHANT_RETURN_ADDRESS, value: "Return Street 2, Tallinn"}
+            # The merchant's registered identity — all seven values, in the
+            # base, with no overlay override in either environment.
+            #
+            # These are not placeholders and they are not credentials. Article
+            # 6(1) CRD as amended by Directive (EU) 2019/2161 and VÕS § 54¹
+            # oblige the trader to publish the name, registered address,
+            # contact address and telephone number; Article 5(1)(d) of
+            # Directive 2000/31/EC obliges it to name the register and the code
+            # within it. A value whose disclosure is the legal requirement
+            # cannot be reserved, and the reserved form of it is a legally
+            # required disclosure that is wrong.
+            #
+            # They live here rather than in the two overlays because there is
+            # one merchant. The overlays differ where the *deployment* differs —
+            # names, ports, storage, Secret references, hostnames — and the
+            # registered identity of the company behind the shop is not one of
+            # those. `MERCHANT_LEGAL_NAME` and the three below it were
+            # previously overridden in `overlays/test` with a second, invented
+            # company; those overrides are deliberately gone, so the test
+            # environment renders the imprint that will be served, which is the
+            # only version of that page worth checking before it is public. The
+            # test storefront is `noindex` on every hostname it answers to, so
+            # it is not a second public imprint.
+            #
+            # The three below the first four reached no manifest in this
+            # repository at all. The storefront resolves each to `null` when
+            # absent and renders `[not configured: …]` in the imprint's prose
+            # plus a page-level incompleteness notice — a page that says out
+            # loud it is incomplete, rather than a crash. That is what kept
+            # `content/schema.ts` refusing to mark any legal page
+            # `operator-approved`.
+            #
+            # Storefront only, for the last three: `backend/src/config/runtime.ts`
+            # requires the first four and reads none of the others, so a copy on
+            # a backend-image workload would be a declaration nothing reads.
+            - {name: MERCHANT_LEGAL_NAME, value: "Plepic Games OÜ"}
+            - {name: MERCHANT_REGISTERED_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
+            - {name: MERCHANT_CONTACT_ADDRESS, value: info@plepicgames.com}
+            - {name: MERCHANT_RETURN_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
+            - {name: MERCHANT_REGISTRATION_NUMBER, value: "14663721"}
+            - {name: MERCHANT_VAT_NUMBER, value: EE102137075}
+            - {name: MERCHANT_PHONE_NUMBER, value: "+372 51 35463"}
             # MEDUSA_PUBLISHABLE_API_KEY, not MEDUSA_PUBLISHABLE_KEY. The
             # storefront reads the former —
             # `storefront/src/config/runtime-env.ts`'s RUNTIME_ENV_VARS,

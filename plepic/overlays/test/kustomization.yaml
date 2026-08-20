@@ -116,10 +116,6 @@ patches:
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
-                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
-                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
-                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
-                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD
@@ -164,10 +160,6 @@ patches:
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
-                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
-                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
-                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
-                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD
@@ -211,10 +203,18 @@ patches:
                   - {name: SITE_BASE_URL, value: "https://test.example.org"}
                   - {name: SITE_CANONICAL_HOST, value: test.example.org}
                   - {name: SITE_TEST_HOSTNAMES, value: test.example.org}
-                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
-                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
-                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
-                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
+                  # No MERCHANT_* entries here, and none in the four other
+                  # patches in this overlay — a decision, not an omission. This
+                  # overlay used to override all four with a second, invented
+                  # company. The merchant's registered identity is a published
+                  # legal disclosure with exactly one correct value (see
+                  # `base/storefront.yaml`), so a test environment rendering
+                  # `Example Test Games OÜ` verified a template while leaving
+                  # the imprint itself unchecked until it was public.
+                  # Inheriting the base is what makes the page this environment
+                  # serves the page live will serve. The site identity above
+                  # still differs, because the *deployment* differs; the
+                  # company behind it does not.
                   - name: MEDUSA_PUBLISHABLE_API_KEY
                     valueFrom: {secretKeyRef: {name: plepic-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY
@@ -265,10 +265,6 @@ patches:
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
-                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
-                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
-                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
-                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: SMTP_USERNAME
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
                   - name: SMTP_PASSWORD
@@ -320,10 +316,6 @@ patches:
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
-                  - {name: MERCHANT_LEGAL_NAME, value: "Example Test Games OÜ"}
-                  - {name: MERCHANT_REGISTERED_ADDRESS, value: "Test Street 1, Tallinn"}
-                  - {name: MERCHANT_CONTACT_ADDRESS, value: legal-test@example.com}
-                  - {name: MERCHANT_RETURN_ADDRESS, value: "Test Return Street 2, Tallinn"}
                   - name: SMTP_USERNAME
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
                   - name: SMTP_PASSWORD

@@ -31,8 +31,10 @@ ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" <<'RUBY'
 # behind does not break the moment the other moves ahead — no *image* assertion
 # below knows or asks which environment it is looking at. (assert_manifest does
 # branch on environment, for the name suffix, the Secret references and the
-# merchant values; none of that reaches image pinning, which is the property
-# that has to hold across a promotion.) And because the requirement is
+# site hosts; none of that reaches image pinning, which is the property that has
+# to hold across a promotion. The merchant identity used to be on that list and
+# deliberately is not any more — see MERCHANT_IDENTITY.) And because the
+# requirement is
 # structural, no future promotion touches this file at all.
 DIGEST_SHAPE = /\Asha256:[0-9a-f]{64}\z/.freeze
 
@@ -281,6 +283,70 @@ BACKEND_IMAGE_REQUIRED_ENVIRONMENT = %w[
 # manifest and the image's requirement stays fail-closed.
 SAME_ORIGIN_CORS_VARIABLES = %w[STORE_CORS ADMIN_CORS AUTH_CORS].freeze
 
+# The merchant's identity: one table, read by both environments.
+#
+# **It does not branch on environment, and that is the assertion rather than an
+# oversight.** Every value here is a disclosure the shop is obliged to
+# *publish* — Article 6(1) CRD as amended by Directive (EU) 2019/2161 and
+# VÕS § 54¹ for the trader's name, registered address, contact address and
+# telephone number, Article 5(1)(d) of Directive 2000/31/EC for the register
+# and the code within it. There is one correct value per field and it is the
+# same value wherever the imprint is served from, so a per-environment merchant
+# identity was never a stricter placeholder; it was a second answer to a
+# question that has one, and the second answer named a company that does not
+# exist.
+#
+# The test environment therefore publishes the real registered identity, which
+# is a decision and not an accident. `/legal/imprint` is a page whose whole
+# purpose is to be checked before it is public, and a test environment
+# rendering `Example Test Games OÜ` lets an operator verify a template while
+# leaving the imprint itself unverified until it is live. Test is also the one
+# environment carrying `noindex` on every hostname it answers to — see the
+# SITE_TEST_HOSTNAMES invariant below — so the identity here is a page the
+# operator can read, not a second imprint competing with the live one for a
+# search result.
+#
+# **This is not a widening of the reserved-placeholder convention.** The
+# placeholders beside it stay placeholders and are still asserted so: the SMTP
+# host must end `.invalid`, the envelope sender and the contact recipient must
+# end `@example.com`, and every SITE_* hostname must be an RFC 2606 reserved
+# name. Those are per-environment private configuration that Orange replaces on
+# the Argo CD Application, and a real value in one of them is an exposure. A
+# legally required disclosure is the opposite kind of value — the law's
+# requirement is precisely that it be published — so the convention never
+# reached it, which is why the three below could be deferred indefinitely with
+# every guard in this file green.
+MERCHANT_IDENTITY = {
+  'MERCHANT_LEGAL_NAME' => 'Plepic Games OÜ',
+  'MERCHANT_REGISTERED_ADDRESS' => 'Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301',
+  'MERCHANT_CONTACT_ADDRESS' => 'info@plepicgames.com',
+  'MERCHANT_RETURN_ADDRESS' => 'Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301',
+}.freeze
+
+# The three disclosures no manifest in this repository used to declare, and the
+# one workload that reads them.
+#
+# Storefront only, and that is a fact about the images rather than a
+# preference. `backend/src/config/runtime.ts` requires the four above at module
+# scope and reads none of these three; `storefront/src/config/runtime-env.ts`
+# lists all seven. A copy on a backend-image workload would be a declaration
+# nothing reads and a second place a later edit could change instead of this
+# one — the same reasoning that keeps the three SITE_* variables on the
+# storefront alone.
+#
+# Absent, none of them fails: `storefront/src/config/runtime-config.ts`
+# resolves each to `null`, and `src/lib/configuration-placeholders.ts` renders
+# a named visible gap inside the imprint's prose plus a page-level
+# incompleteness notice. So the deployed failure mode was an imprint served to
+# every visitor announcing that it is missing a register code — which is also
+# why `content/schema.ts` refused to mark any legal page `operator-approved`
+# while these were undeclared.
+MERCHANT_STOREFRONT_DISCLOSURES = {
+  'MERCHANT_REGISTRATION_NUMBER' => '14663721',
+  'MERCHANT_VAT_NUMBER' => 'EE102137075',
+  'MERCHANT_PHONE_NUMBER' => '+372 51 35463',
+}.freeze
+
 ADDRESS_SHAPE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.freeze
 
 # RFC 2606 and RFC 6761 reserve these names precisely so documentation and
@@ -378,6 +444,28 @@ def public_account_addresses(text)
   text.scan(ADDRESS_SHAPE).reject { |address| RESERVED_ADDRESS.match?(address) }.uniq
 end
 
+# The one non-reserved address these manifests may carry, and the reason the
+# whole-file scan is not what stands between this repository and it.
+#
+# `MERCHANT_CONTACT_ADDRESS` is the address Article 6(1)(c) CRD obliges the
+# trader to publish, and the imprint publishes it. An address whose disclosure
+# is a legal requirement is not an exposure, and there is no reserved form of
+# it: a placeholder here is a legally required disclosure that is wrong.
+#
+# The exemption is **one literal string**, never a domain and never a pattern.
+# `orders@plepicgames.com` is refused exactly as `orders@merchant-domain.com`
+# is, which is what the control below proves on every run — an exemption
+# written as a domain would have quietly admitted every future account at it.
+# The second half of the narrowing is in assert_manifest: the address must
+# occur in the rendered overlay exactly as many times as there are
+# `MERCHANT_CONTACT_ADDRESS` entries, so the exemption cannot be used to put
+# the same address in a role nothing here declares.
+MERCHANT_CONTACT_ADDRESS = MERCHANT_IDENTITY.fetch('MERCHANT_CONTACT_ADDRESS').freeze
+
+def undisclosed_public_addresses(text)
+  public_account_addresses(text) - [MERCHANT_CONTACT_ADDRESS]
+end
+
 # Positive control. A boundary that never fires is indistinguishable from one
 # that is broken, and this one was widened deliberately — so prove on every run
 # that it still refuses a non-reserved address before trusting it to pass.
@@ -396,6 +484,24 @@ end
   actual_forbidden = !public_account_addresses(address).empty?
   next if actual_forbidden == expected_forbidden
   raise "address boundary control failed: #{address.split('@').first}@… " \
+        "expected forbidden=#{expected_forbidden}, got #{actual_forbidden}"
+end
+
+# The same control one level up, on the path the scan in assert_manifest
+# actually takes. The row that matters is the second: the merchant's own domain
+# with a different local part is still forbidden, so the disclosure exemption
+# admits one address rather than an account namespace. Without this row an
+# exemption written as `end_with?('@plepicgames.com')` would pass every
+# assertion in this file.
+[
+  [MERCHANT_CONTACT_ADDRESS, false],
+  ["orders@#{MERCHANT_CONTACT_ADDRESS.split('@').last}", true],
+  ['orders@merchant-domain.com', true],
+  ['orders-test@example.com', false],
+].each do |address, expected_forbidden|
+  actual_forbidden = !undisclosed_public_addresses(address).empty?
+  next if actual_forbidden == expected_forbidden
+  raise "disclosure exemption control failed: #{address.split('@').first}@… " \
         "expected forbidden=#{expected_forbidden}, got #{actual_forbidden}"
 end
 
@@ -969,21 +1075,6 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     kind = %w[predeploy catalogue-import].include?(component) ? 'Job' : 'Deployment'
     resource(documents, kind, "plepic-#{component}#{suffix}")
   end
-  merchant_environment = if environment == 'test'
-    {
-      'MERCHANT_LEGAL_NAME' => 'Example Test Games OÜ',
-      'MERCHANT_REGISTERED_ADDRESS' => 'Test Street 1, Tallinn',
-      'MERCHANT_CONTACT_ADDRESS' => 'legal-test@example.com',
-      'MERCHANT_RETURN_ADDRESS' => 'Test Return Street 2, Tallinn',
-    }
-  else
-    {
-      'MERCHANT_LEGAL_NAME' => 'Example Games OÜ',
-      'MERCHANT_REGISTERED_ADDRESS' => 'Example Street 1, Tallinn',
-      'MERCHANT_CONTACT_ADDRESS' => 'legal@example.com',
-      'MERCHANT_RETURN_ADDRESS' => 'Return Street 2, Tallinn',
-    }
-  end
   database_workloads.each do |workload|
     container = pod_spec(workload).dig('containers', 0)
     raise 'database name mismatch' unless env_value(container, 'DATABASE_NAME') == database
@@ -1044,10 +1135,22 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise 'backend-family SMTP host must remain deployment-supplied' unless env_value(container, 'SMTP_HOST')&.end_with?('.invalid')
     raise 'backend-family envelope sender must be synthetic' unless env_value(container, 'SMTP_ENVELOPE_FROM')&.end_with?('@example.com')
     raise 'backend-family contact recipient must be synthetic' unless env_value(container, 'CONTACT_MAIL_RECIPIENT')&.end_with?('@example.com')
-    actual_merchant_environment = merchant_environment.keys.to_h do |name|
+    # The four the backend image requires, against the one table both
+    # environments read. See MERCHANT_IDENTITY for why it no longer branches on
+    # environment: the durable order-confirmation email quotes the same
+    # withdrawal notice the legal pages do, and there is one seller behind both.
+    actual_merchant_identity = MERCHANT_IDENTITY.keys.to_h do |name|
       [name, env_value(container, name)]
     end
-    raise 'backend-family merchant legal contract mismatch' unless actual_merchant_environment == merchant_environment
+    raise 'backend-family merchant legal contract mismatch' unless actual_merchant_identity == MERCHANT_IDENTITY
+    # Storefront-only, asserted here as well as in the consumer census below,
+    # because this loop reads container 0 of each backend-image workload by
+    # name and gives the clearer message for the copy-paste that produces it.
+    stray_disclosures = MERCHANT_STOREFRONT_DISCLOSURES.keys.select do |name|
+      container.fetch('env', []).any? { |entry| entry['name'] == name }
+    end
+    raise "#{workload.dig('metadata', 'name')} declares storefront-only merchant disclosures: " \
+          "#{stray_disclosures.inspect}" unless stray_disclosures.empty?
   end
 
   # Selected by the repository they run, not by a hand-written list of names and
@@ -1194,7 +1297,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   storefront_environment = pod_spec(resource(documents, 'Deployment', "plepic-storefront#{suffix}"))
     .dig('containers', 0, 'env').to_h { |entry| [entry['name'], entry['value']] }
   raise 'storefront and backend merchant legal contracts differ' unless
-    storefront_environment.slice(*merchant_environment.keys) == merchant_environment
+    storefront_environment.slice(*MERCHANT_IDENTITY.keys) == MERCHANT_IDENTITY
   backend_url = URI(storefront_environment.fetch('MEDUSA_BACKEND_URL'))
   raise 'storefront has dangling backend Service endpoint' unless
     backend_url.scheme == 'http' && service_ports[backend_url.host] == backend_url.port.to_s
@@ -1252,6 +1355,38 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     # removed, not for the crash that followed it.
     raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
   end
+
+  # The three legally required disclosures, which this repository declared
+  # nowhere until now — see MERCHANT_STOREFRONT_DISCLOSURES.
+  #
+  # Read across every container of the storefront pod and required exactly
+  # once, for the reason the site-host block above gives: a second declaration
+  # in a sidecar wins at runtime and is invisible to a container-0 read. As a
+  # literal and never a `valueFrom`, which the value comparison refuses on the
+  # spot — an entry delivered by reference carries no `value` at all — and
+  # which the README's delivery constraint requires anyway: none of the three
+  # is a credential, and ESO is the wrong path for a public disclosure.
+  MERCHANT_STOREFRONT_DISCLOSURES.each do |name, expected|
+    entries = storefront_containers.flat_map do |container|
+      container.fetch('env', []).select { |entry| entry['name'] == name }
+    end
+    raise "storefront must declare #{name} exactly once" unless entries.length == 1
+    raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
+  end
+
+  # And only the storefront declares them. The mirror of "the site host
+  # configuration must reach only the storefront" below, for the same failure:
+  # a copy on a backend-image workload reads nothing and becomes the place a
+  # later edit updates instead of this one.
+  merchant_disclosure_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    declared = MERCHANT_STOREFRONT_DISCLOSURES.keys.select { |name| env_present?(containers, name) }
+    [workload.dig('metadata', 'name'), declared.sort] unless declared.empty?
+  end.to_h
+  raise 'the merchant disclosures only the storefront reads must reach only it' unless
+    merchant_disclosure_consumers == {
+      "plepic-storefront#{suffix}" => MERCHANT_STOREFRONT_DISCLOSURES.keys.sort,
+    }
 
   # Three properties of the option table itself, and the reason they are sited
   # here rather than over the rendered values.
@@ -1649,8 +1784,23 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   assert_network_contract(documents, suffix)
   rendered = File.read(path)
   raise 'IPv6 exposure is forbidden' if rendered.include?('::')
-  offending_addresses = public_account_addresses(rendered)
+  offending_addresses = undisclosed_public_addresses(rendered)
   raise "public account addresses are forbidden (#{offending_addresses.length} found)" unless offending_addresses.empty?
+  # The other half of the disclosure exemption: the merchant's contact address
+  # is admitted *in the role it is declared for* and nowhere else. Counting
+  # occurrences is what makes that structural — the exemption cannot be used to
+  # put the address in an annotation, a label, a Secret name or an SMTP field,
+  # because every occurrence has to be matched by a declaration this contract
+  # already reads and compares to MERCHANT_IDENTITY.
+  declared_contact_entries = workloads(documents).sum do |workload|
+    pod_containers(pod_spec(workload)).sum do |container|
+      container.fetch('env', []).count { |entry| entry['name'] == 'MERCHANT_CONTACT_ADDRESS' }
+    end
+  end
+  rendered_contact_occurrences = rendered.scan(MERCHANT_CONTACT_ADDRESS).length
+  raise "the merchant contact address occurs #{rendered_contact_occurrences} times for " \
+        "#{declared_contact_entries} declarations" unless
+    rendered_contact_occurrences == declared_contact_entries
   rendered.scan(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/).each do |literal|
     next if ['0.0.0.0', '0.0.0.0/0'].include?(literal)
     raise "public IPv4 is forbidden: #{literal}" unless IPAddr.new(literal).private?
@@ -2863,6 +3013,115 @@ def assert_promotion_accepted(source_path, options, description)
       raise "#{description} was refused: #{error.message}"
     end
   end
+end
+
+# The state this change exists to make unreachable: the storefront shipping
+# without one of the three legally required disclosures. Nothing else in this
+# file objects — the pod is hardened, pinned, counted and correctly wired — and
+# the deployed result is an imprint that renders "[not configured: VAT
+# identification number]" and a page-level incompleteness notice to every
+# visitor. That was the repository's state before this commit, and it was green.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a storefront shipping without its VAT number',
+  'storefront must declare MERCHANT_VAT_NUMBER exactly once'
+) do |documents|
+  storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
+  storefront.fetch('env').reject! { |entry| entry['name'] == 'MERCHANT_VAT_NUMBER' }
+end
+
+# The same disclosure in a sidecar, with container 0 still correct. This is the
+# blind spot the site-host and publishable-key guards were rewritten for, and
+# the reason the block above reads every container of the pod.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a storefront sidecar declaring a second registry code',
+  'storefront must declare MERCHANT_REGISTRATION_NUMBER exactly once'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  pod_spec(storefront).fetch('containers') << {
+    'name' => 'edge-sidecar',
+    'image' => "postgres:17.10-bookworm@#{PLAUSIBLE_DIGEST}",
+    'env' => [{ 'name' => 'MERCHANT_REGISTRATION_NUMBER', 'value' => '00000000' }],
+    'securityContext' => HARDENED_SIDECAR_SECURITY.dup,
+    'resources' => HARDENED_SIDECAR_RESOURCES.dup,
+  }
+end
+
+# The three copied onto a backend-image workload, at the correct values. Every
+# value assertion is satisfied; only the consumer census refuses it. Without
+# that census this is how a second home for the merchant disclosures appears,
+# and the next edit updates one of the two.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the storefront-only merchant disclosures copied onto the backend',
+  'declares storefront-only merchant disclosures'
+) do |documents|
+  backend = pod_spec(resource(documents, 'Deployment', 'plepic-backend-test')).fetch('containers').first
+  MERCHANT_STOREFRONT_DISCLOSURES.each do |name, value|
+    backend.fetch('env') << { 'name' => name, 'value' => value }
+  end
+end
+
+# The identity drifting between the two images that resolve the same withdrawal
+# notice: the storefront's imprint naming one seller while the order
+# confirmation email names another. Both values are individually plausible.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a merchant legal name that differs between the storefront and the backend',
+  'storefront and backend merchant legal contracts differ'
+) do |documents|
+  storefront = pod_spec(resource(documents, 'Deployment', 'plepic-storefront-test')).fetch('containers').first
+  storefront.fetch('env').each do |entry|
+    entry['value'] = 'Plepic Games Test OÜ' if entry['name'] == 'MERCHANT_LEGAL_NAME'
+  end
+end
+
+# The merchant identity reverting to a per-environment answer. This is the
+# change a reader who has internalised the placeholder convention would make on
+# seeing a real company name in a public repository, and it is the one this
+# file now refuses in both directions: the value is wrong, not merely
+# unreserved.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the test environment back on a merchant identity of its own',
+  'backend-family merchant legal contract mismatch'
+) do |documents|
+  %w[plepic-backend-test plepic-worker-test].each do |name|
+    container = pod_spec(resource(documents, 'Deployment', name)).fetch('containers').first
+    container.fetch('env').each do |entry|
+      entry['value'] = 'Example Test Games OÜ' if entry['name'] == 'MERCHANT_LEGAL_NAME'
+    end
+  end
+end
+
+# A real account address arriving in this repository, at the merchant's own
+# domain. The disclosure exemption is one literal string, so this is refused
+# exactly as an address at any other real domain would be — the row the
+# exemption control near the top of this file holds in the abstract, held here
+# against a rendered overlay.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'a second account address at the merchant domain',
+  'public account addresses are forbidden'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  storefront['metadata']['annotations'] =
+    storefront['metadata'].fetch('annotations', {}).merge('plepic/owner' => 'orders@plepicgames.com')
+end
+
+# And the exempt address itself, in a role nothing declares. The scan cannot
+# see this one — the address is exempt — so the occurrence count is the whole
+# guard, and this is what stops the exemption from being a hole the size of one
+# string that anything may write anywhere.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the disclosed contact address reused outside its declaration',
+  'the merchant contact address occurs'
+) do |documents|
+  storefront = resource(documents, 'Deployment', 'plepic-storefront-test')
+  storefront['metadata']['annotations'] =
+    storefront['metadata'].fetch('annotations', {}).merge('plepic/owner' => MERCHANT_CONTACT_ADDRESS)
 end
 
 assert_promotion_accepted(
