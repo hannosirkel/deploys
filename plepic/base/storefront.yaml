@@ -81,14 +81,34 @@ spec:
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
             - name: TURNSTILE_SITE_KEY
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: TURNSTILE_SITE_KEY}}
-          readinessProbe: &probe
+          # Readiness asks the real question -- can this pod serve the shop --
+          # so it stays on `/`, and a storefront that cannot render its
+          # catalogue is correctly pulled from the Service endpoints.
+          #
+          # Liveness must not, and the two probes no longer share a definition.
+          # `/` renders the catalogue, which reaches Medusa: it fails when the
+          # store has no product, or more than one region, or when the backend
+          # is briefly slow. None of those is cured by killing the container,
+          # and restarting on them turns an ordinary change made in Medusa
+          # Admin into a CrashLoopBackOff with growing backoff, on a single
+          # replica with no PodDisruptionBudget. Liveness therefore asks only
+          # whether this Next.js process is alive: `/robots.txt` is generated
+          # per request from host configuration and makes no backend call.
+          #
+          # Both carry an explicit timeout. The default is one second, and a
+          # catalogue render now costs two sequential backend round trips, so
+          # the default left a GC pause or a cold cache able to flap readiness
+          # and -- while liveness was also on `/` -- restart a healthy pod.
+          readinessProbe:
             httpGet: {path: /, port: http}
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
           livenessProbe:
-            <<: *probe
+            httpGet: {path: /robots.txt, port: http}
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
