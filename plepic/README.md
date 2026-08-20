@@ -21,13 +21,40 @@ Orange WireGuard address as an `externalIP`; there is no Ingress, NodePort, or
 LoadBalancer. Orange supplies the real per-environment ingress and SMTP source
 patches without placing live addresses in this public repository.
 
-The base also carries reserved non-secret mail and merchant placeholders. The
-SMTP host, envelope sender, contact recipient, merchant legal name, registered
-address, legal contact address, and return address must all be replaced by the
-private per-environment configuration before deployment. Storefront and every
-backend-image workload deliberately receive the same four `MERCHANT_*` values,
-because the storefront legal pages and durable order-confirmation email resolve
-the same approved withdrawal notice.
+The base carries reserved non-secret mail placeholders: the SMTP host, the
+envelope sender and the contact recipient are per-environment configuration and
+must be replaced by the private inventory before deployment.
+
+**The merchant identity is not one of them.** The base declares all seven
+`MERCHANT_*` values at their real, published values, and neither overlay
+overrides them. Article 6(1) CRD as amended by Directive (EU) 2019/2161 and
+VÕS § 54¹ oblige the trader to publish its name, registered address, contact
+address and telephone number, and Article 5(1)(d) of Directive 2000/31/EC
+obliges it to name the register and the code within it — so each of these has
+exactly one correct value, the law's requirement is that it be *published*, and
+a reserved placeholder in one of these fields is a legally required disclosure
+that is wrong rather than a secret withheld. They are declared in the base
+rather than per overlay because there is one merchant: the overlays differ where
+the *deployment* differs — names, ports, storage, Secret references, hostnames —
+and the registered identity of the company behind the shop is not one of those.
+
+The test overlay used to override four of them with a second, invented company,
+and deliberately no longer does. `/legal/imprint` is a page whose whole purpose
+is to be checked before it is public; a test environment rendering
+`Example Test Games OÜ` verified a template and left the imprint itself
+unchecked until it was live. The test storefront carries `noindex` on every
+hostname it answers to, so the real identity there is a page the operator can
+read rather than a second imprint competing with the live one.
+
+Storefront and every backend-image workload receive the same four values —
+legal name, registered address, contact address, return address — because the
+storefront legal pages and the durable order-confirmation email resolve the same
+approved withdrawal notice. `MERCHANT_REGISTRATION_NUMBER`,
+`MERCHANT_VAT_NUMBER` and `MERCHANT_PHONE_NUMBER` reach the **storefront
+alone**: `backend/src/config/runtime.ts` requires the first four at module scope
+and reads none of these three, so a copy on a backend-image workload would be a
+declaration nothing reads and a second place a later edit could change instead
+of the base. The contract asserts that consumer set exactly, in both directions.
 
 `STORE_CORS`, `ADMIN_CORS`, and `AUTH_CORS` are declared on every backend-image
 workload with an explicitly empty value, and must stay empty. Nothing reaches
@@ -229,9 +256,10 @@ the first test promotion was refused by this repository rather than by anything
 wrong with the manifests. No image assertion — the digest requirement, the
 census, or the per-repository digest uniformity — knows or asks which
 environment it is inspecting. The contract as a whole does branch on
-environment, for the name suffix, the Secret references and the merchant
-values; nothing concerning image pinning does, which is what lets the two
-overlays be promoted independently.
+environment, for the name suffix, the Secret references and the site hosts;
+nothing concerning image pinning does, which is what lets the two overlays be
+promoted independently. The merchant values used to be on that list of
+environment-dependent things and deliberately are not any more.
 
 Alongside the digest requirement the contract holds a container census — four
 containers run the backend image and one runs the storefront image, counted by
@@ -263,13 +291,18 @@ and rehearsed before launch.
 ## What Task 6 must inject
 
 Every value below is per-environment configuration that this public repository
-deliberately does not carry. Static values have reserved placeholders or are
-absent, and Orange patches their real values onto the Argo CD `Application` from
-the private inventory, exactly as it does for Servitium's source ranges.
-Purpose-specific file or cadenced state instead arrives through the dedicated
-ESO projections whose Secret names and keys these manifests declare.
+deliberately does not carry, plus the rows that say **already supplied here**,
+which are listed so Task 6 knows not to patch them. Static values have reserved
+placeholders or are absent, and Orange patches their real values onto the Argo CD
+`Application` from the private inventory, exactly as it does for Servitium's
+source ranges. Purpose-specific file or cadenced state instead arrives through
+the dedicated ESO projections whose Secret names and keys these manifests
+declare.
 **The placeholders in this repository are not defects to be corrected in place**
-— replacing one with a real hostname is the thing the contract tests refuse.
+— replacing one with a real hostname is the thing the contract tests refuse. The
+merchant identity is not a placeholder and never was one: it is a disclosure the
+law requires the shop to publish, it is tracked here at its real value, and the
+contract tests refuse *that* being replaced by a reserved-looking substitute.
 
 *Storefront, live namespace `plepic`:*
 
@@ -279,8 +312,8 @@ ESO projections whose Secret names and keys these manifests declare.
 | `SITE_CANONICAL_HOST` | the same apex hostname, bare; it must equal the base URL's host |
 | `SITE_TEST_HOSTNAMES` | **empty, and it stays empty.** A live hostname here is a live site serving `noindex` |
 | `ANALYTICS_MEASUREMENT_ID` | the GA4 measurement ID. Live only. It is an account identifier, so it reaches a pod only from the inventory and never from a tracked file; absent, the analytics loader never mounts |
-| `MERCHANT_REGISTRATION_NUMBER`, `MERCHANT_VAT_NUMBER`, `MERCHANT_PHONE_NUMBER` | the three legally required disclosures no manifest here declares. Absent, each renders as a named visible gap plus a page-level incompleteness notice — which is why they are deferred rather than placeheld, and also why they must not ship missing |
-| `MERCHANT_LEGAL_NAME`, `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` | the real four, replacing the reserved placeholders these manifests declare |
+| `MERCHANT_REGISTRATION_NUMBER`, `MERCHANT_VAT_NUMBER`, `MERCHANT_PHONE_NUMBER` | **nothing — already supplied here**, in `base/storefront.yaml`, at their real values. These are legally required disclosures rather than private configuration; see the merchant-identity section above. They were previously declared in no manifest at all, which rendered each as a named visible gap plus a page-level incompleteness notice on a page that still returned 200. Task 6 must not override them |
+| `MERCHANT_LEGAL_NAME`, `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` | **nothing — already supplied here**, in the base, for the storefront and every backend-image workload. Task 6 must not override them |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional. Absent renders one link fewer and nothing else — no gap marker, no notice. Supply it, but do not hold a release for it |
 | `REDIRECT_MAP_PATH` | **already supplied here** as `/var/run/plepic/redirect-map/redirect-map.json`. The file is projected read-only from exactly the `redirect-map.json` key of `plepic-redirect-map` |
 
@@ -292,7 +325,7 @@ ESO projections whose Secret names and keys these manifests declare.
 | `SITE_CANONICAL_HOST` | the test hostname, bare, equal to the base URL's host |
 | `SITE_TEST_HOSTNAMES` | **every hostname the test storefront answers to**, its canonical host among them, as a **comma-separated** list of bare hostnames — no scheme, port or path. Not "the canonical host": `isTestHost()` matches the request's `Host` header against this list, so a second name the deployment answers to and this list omits is a test hostname served without `noindex`. `readEnvList` splits on commas only; any other separator leaves the whole value as one entry, which then fails the bare-hostname check and refuses to start rather than silently matching nothing |
 | `ANALYTICS_MEASUREMENT_ID` | **must not be supplied.** One GA property exists with no test data stream, and the test environment has no analytics at all. Absent is the required behaviour, not an omission to be tidied |
-| the three `MERCHANT_*` above, and the real four | the test environment renders the same legal pages |
+| all seven `MERCHANT_*` | **nothing.** The test environment inherits the base and renders the same imprint live will, which is the only version of that page worth checking before it is public |
 | `EXTERNAL_URL_CONSUMER_DISPUTES_COMMITTEE` | optional, as live |
 | `REDIRECT_MAP_PATH` | the same literal path and the same map content as live, projected from `plepic-test-redirect-map`. Supplying it in test makes the retired-domain redirects verifiable before public routing exists |
 
@@ -303,11 +336,13 @@ ESO projections whose Secret names and keys these manifests declare.
 | `CATALOGUE_IMPORT_ENVIRONMENT` | **already supplied here** — `live` in the base, `test` in the test overlay — and Task 6 must not override it with anything else. The import accepts exactly these two |
 | `CATALOGUE_IMPORT_ARCHIVE_SHA256` | the Job already declares an explicit reference to the same-named key in `plepic-import-expectation` or `plepic-test-import-expectation`. Before each import, Orange supplies the bare 64-lowercase-hex digest of the archive actually staged; no `sha256:` prefix and no tracked literal |
 
-*Backend-image workloads:* the SMTP host, envelope sender, contact recipient and
-the four merchant values these manifests declare are reserved placeholders on
-the same terms — see "The base also carries reserved non-secret mail and
-merchant placeholders" above — and the live per-Service ingress source ranges
-reach the cluster the same way, as Ansible-rendered patches on the Application.
+*Backend-image workloads:* the SMTP host, envelope sender and contact recipient
+these manifests declare are reserved placeholders on the same terms — see "The
+base carries reserved non-secret mail placeholders" above — and the live
+per-Service ingress source ranges reach the cluster the same way, as
+Ansible-rendered patches on the Application. The four merchant values beside
+them are **not** placeholders and Task 6 must not patch them; they are the real
+published identity, in the base, in one place.
 The backend API alone declares literal `MEDUSA_WORKER_MODE=server`; the worker
 and both lifecycle Jobs deliberately do not. This keeps the API a publisher and
 the worker the only background consumer.
@@ -315,9 +350,12 @@ the worker the only background consumer.
 *Delivery constraints, which are part of the specification:*
 
 - **Static private configuration uses literal `value:` entries, never External
-  Secrets.** Site identity, analytics, merchant identity, mail routing, and
-  optional external links are Application patches from private inventory. The
-  storefront contract independently refuses a site host delivered by reference.
+  Secrets.** Site identity, analytics, mail routing, and optional external links
+  are Application patches from private inventory. The storefront contract
+  independently refuses a site host delivered by reference. The merchant
+  identity is delivered as a literal too, and for the same reason — it is not a
+  credential — but it is not private configuration and does not arrive by patch:
+  it is tracked here.
 - **Redirect content and the archive expectation use separate, exact ESO
   projections.** Do not add either to the runtime-credential Secret. The
   storefront volume projects only `redirect-map.json`; the import Job references
