@@ -115,6 +115,7 @@ patches:
                   - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: SMTP_FROM_NAME, value: Plepic Games Test}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
@@ -159,6 +160,7 @@ patches:
                   - {name: REDIS_HOST, value: plepic-redis-test}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: SMTP_FROM_NAME, value: Plepic Games Test}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
                   - name: DATABASE_PASSWORD
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: DATABASE_PASSWORD}}
@@ -264,6 +266,7 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID}}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: SMTP_FROM_NAME, value: Plepic Games Test}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
                   - name: SMTP_USERNAME
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
@@ -315,6 +318,7 @@ patches:
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID}}
                   - {name: SMTP_HOST, value: smtp-test.invalid}
                   - {name: SMTP_ENVELOPE_FROM, value: orders-test@example.com}
+                  - {name: SMTP_FROM_NAME, value: Plepic Games Test}
                   - {name: CONTACT_MAIL_RECIPIENT, value: contact-test@example.com}
                   - name: SMTP_USERNAME
                     valueFrom: {secretKeyRef: {name: plepic-test-runtime-credentials, key: SMTP_USERNAME}}
