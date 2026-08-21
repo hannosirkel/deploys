@@ -264,6 +264,7 @@ BACKEND_IMAGE_REQUIRED_ENVIRONMENT = %w[
   STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
   SMTP_HOST
   SMTP_PORT
+  SMTP_FROM_NAME
   SMTP_USERNAME
   SMTP_PASSWORD
   SMTP_ENVELOPE_FROM
@@ -1163,6 +1164,9 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise 'backend-family SMTP port must be submission 587' unless env_value(container, 'SMTP_PORT') == '587'
     raise 'backend-family SMTP host must remain deployment-supplied' unless env_value(container, 'SMTP_HOST')&.end_with?('.invalid')
     raise 'backend-family envelope sender must be synthetic' unless env_value(container, 'SMTP_ENVELOPE_FROM')&.end_with?('@example.com')
+    expected_from_name = environment == 'test' ? 'Plepic Games Test' : 'Plepic Games'
+    raise 'backend-family SMTP sender name mismatch' unless
+      env_value(container, 'SMTP_FROM_NAME') == expected_from_name
     raise 'backend-family contact recipient must be synthetic' unless env_value(container, 'CONTACT_MAIL_RECIPIENT')&.end_with?('@example.com')
     # The four the backend image requires, against the one table both
     # environments read. See MERCHANT_IDENTITY for why it no longer branches on

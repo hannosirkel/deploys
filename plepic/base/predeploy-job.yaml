@@ -78,6 +78,7 @@ spec:
             - {name: SMTP_HOST, value: smtp.invalid}
             - {name: SMTP_PORT, value: "587"}
             - {name: SMTP_ENVELOPE_FROM, value: orders@example.com}
+            - {name: SMTP_FROM_NAME, value: Plepic Games}
             - {name: CONTACT_MAIL_RECIPIENT, value: contact@example.com}
             # The merchant's registered identity, which is a published legal
             # disclosure rather than a placeholder. See `README.md` and the
