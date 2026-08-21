@@ -1,0 +1,21 @@
+# Generated from hannosirkel/architecture. Do not edit by hand.
+# Regenerate with: tooling/universe sync-baseline deploys
+
+plugins = ["generic"]
+files = [
+  "**/*.sh",
+  "**/*.bats",
+  "**/*.md",
+  "**/*.yaml",
+  "**/*.yml",
+  "!**/node_modules/**",
+]
+
+# The plugin default is 200; the universe standard is this.
+[sensors.line-count]
+args = ["--max", "400"]
+
+# No npm project here, so jscpd cannot resolve from
+# node_modules/.bin. line-count is built in and still runs.
+[sensors.jscpd]
+disabled = true
