@@ -13,8 +13,7 @@ Governed by [`architecture`](https://github.com/hannosirkel/architecture).
 | Languages | shell |
 
 **Standards that apply here.** Read a standard before you change something it
-governs. They live in a private repository: if a link does not open for you, the
-rules stated below and this repository's CI are what bind.
+governs.
 
 - [Agent operation](https://github.com/hannosirkel/architecture/blob/main/standards/agent-operation.md) — worktrees, branches, multi-agent safety, delegation
 - [Security](https://github.com/hannosirkel/architecture/blob/main/standards/security.md) — secrets, public and private boundaries, workflow hardening
