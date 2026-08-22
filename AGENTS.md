@@ -13,7 +13,8 @@ Governed by [`architecture`](https://github.com/hannosirkel/architecture).
 | Languages | shell |
 
 **Standards that apply here.** Read a standard before you change something it
-governs.
+governs. They live in a private repository: if a link does not open for you, the
+rules stated below and this repository's CI are what bind.
 
 - [Agent operation](https://github.com/hannosirkel/architecture/blob/main/standards/agent-operation.md) — worktrees, branches, multi-agent safety, delegation
 - [Security](https://github.com/hannosirkel/architecture/blob/main/standards/security.md) — secrets, public and private boundaries, workflow hardening
@@ -23,16 +24,16 @@ governs.
 - [GitOps and deployment](https://github.com/hannosirkel/architecture/blob/main/standards/gitops-and-deployment.md) — promotion by digest, rollback, the sanctioned secrets path
 - Language standards: [shell](https://github.com/hannosirkel/architecture/blob/main/standards/languages/shell.md)
 
-**Never commit to a default branch.** Work in `~/app/.worktrees/deploys/<task>`,
-branch from `origin/main`, and open a pull request.
+**Never commit to a default branch.** Work in `~/app/.worktrees/deploys/<task>`.
+Branch from `origin/main`. Open a pull request.
 
 **A working plan for this repository goes in `docs/working/`.** A change
 spanning several repositories with no clear owner starts in `architecture`
 instead.
 
 **This repository must be safe to publish.** Never commit a password, token, key, kubeconfig,
-rendered Secret, or live export. No repository here holds a secret value, and a
-private one is no exception.
+rendered Secret, or live export. No repository in this universe holds a secret
+value, and a private one is no exception.
 
 **Run `habit-hooks` before declaring an edit done.** If it is not on `PATH`:
 
@@ -40,8 +41,9 @@ private one is no exception.
 uv tool install "habit-hooks[python,typescript]"
 ```
 
-Name every language in that one command: a later install naming a different
-extra silently replaces this one.
+That command names every language plugin **this universe** uses, not this
+repository's. Install it whole: a later install naming fewer extras silently
+removes the rest.
 
 <!-- END MANAGED ARCHITECTURE BASELINE -->
 
