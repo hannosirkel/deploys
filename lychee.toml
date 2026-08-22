@@ -1,0 +1,19 @@
+# Link checking for the deploys repository.
+#
+# Internal links are checked strictly. External links are checked except where
+# the answer would be meaningless.
+
+exclude = [
+  # Five repositories are private. An anonymous checker gets 404 for a private
+  # repository that exists, which is a false failure rather than a finding.
+  # Narrow to exactly those five: every other link, including every standards
+  # link the generated AGENTS.md section carries, is checked for real.
+  "^https://github\\.com/hannosirkel/(architecture|orange|orange-inventory|myskills|entpass)(/|$)",
+]
+
+# GitHub rate-limits anonymous requests hard enough to make a run flaky.
+max_concurrency = 4
+max_retries = 2
+timeout = 20
+
+accept = ["200", "204", "206", "429"]

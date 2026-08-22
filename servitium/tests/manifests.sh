@@ -11,6 +11,11 @@ for environment in live test; do
   rendered="$temporary/$environment.yaml"
   kubectl kustomize "servitium/overlays/$environment" >"$rendered"
   test "$(grep -c 'image: ghcr.io/hannosirkel/servitium@sha256:' "$rendered")" -eq 1
+  # Baselined pre-existing finding, not a fix. `!` exempts the command from
+  # errexit, so this negative assertion cannot fail the script. Correcting it
+  # changes the script's behaviour, which is out of scope for a governance
+  # change; see standards/languages/shell.md.
+  # shellcheck disable=SC2251
   ! grep -q 'sha256:0000000000000000000000000000000000000000000000000000000000000000' "$rendered"
 done
 
@@ -26,6 +31,8 @@ grep -q 'port: 8098' "$temporary/test.yaml"
 grep -q 'value: servitium_test$' "$temporary/test.yaml"
 grep -q 'value: servitium-test$' "$temporary/test.yaml"
 grep -q 'secretName: servitium-test-secrets' "$temporary/test.yaml"
+# Baselined pre-existing finding, not a fix. Same SC2251 shape as above.
+# shellcheck disable=SC2251
 ! grep -q 'secretName: servitium-secrets$' "$temporary/test.yaml"
 
 ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" <<'RUBY'
