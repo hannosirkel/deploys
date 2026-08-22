@@ -53,3 +53,19 @@ kubectl kustomize plepic/overlays/test >/dev/null
 
 The `Validate` workflow runs both application roots' checks for pull requests
 and pushes to `main`. The repository root remains non-deployable.
+
+## Governance
+
+This repository is governed by
+[`architecture`](https://github.com/hannosirkel/architecture), which owns the
+catalogue, the shared standards, and the generated section of
+[`AGENTS.md`](AGENTS.md). Read `AGENTS.md` before changing anything here.
+
+It owns deployable desired state, the promotion and rollback rules, and the
+manifest validation. It does not own application source, the Argo CD
+`Application` objects and namespaces that `orange` owns, or live private values,
+which `orange-inventory` holds.
+
+**It is public and must stay safe to publish.** It carries no secret value of
+any kind. The sanctioned path for a secret is named in
+[`standards/gitops-and-deployment.md`](https://github.com/hannosirkel/architecture/blob/main/standards/gitops-and-deployment.md).
