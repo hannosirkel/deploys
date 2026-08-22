@@ -1,0 +1,23 @@
+{
+  // Layout checking for the deploys repository. Wording is a review concern.
+  //
+  // This is a baseline, not a cleanup. The rules disabled below fire on prose
+  // that already exists; every other rule gates new work from today.
+  "config": {
+    "default": true,
+
+    // 23 pre-existing findings: 17 in plepic/README.md, 6 in AGENTS.md. Prose
+    // wraps at 80 columns by convention, but a wide table row and a pinned
+    // digest cannot. AGENTS.md is generated, so its findings are not this
+    // repository's to fix at all.
+    "MD013": false,
+
+    // 12 pre-existing findings, all in plepic/README.md. MD060 enforces one
+    // pipe-spacing style across every table; the existing tables use both.
+    // Satisfying it means reformatting tables, which is exactly the
+    // repository-wide reformatting standards/code-quality.md forbids.
+    "MD060": false
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["node_modules/**"]
+}
