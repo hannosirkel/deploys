@@ -7,10 +7,10 @@ resources:
 images:
   - name: ghcr.io/hannosirkel/plepic-backend
     newName: ghcr.io/hannosirkel/plepic-backend
-    digest: sha256:d4f2f1194a598225ca2da207e778f9cf98ae4c81706416cb4856cdc3b82c5f1d
+    digest: sha256:cfa53b48f59e6e355c4119219c60a1c5e6d521d9b5c5f6d0e0a34d0249ec21d6
   - name: ghcr.io/hannosirkel/plepic-storefront
     newName: ghcr.io/hannosirkel/plepic-storefront
-    digest: sha256:c06eae1db7419349f7970914c0feaf2722f086f97e45afde434ba66ff819e27d
+    digest: sha256:c4ed4780b83aa1b7340d213c7ef8ba94dfee630ea8bc6a575007d272a5a7d872
 patches:
   - target:
       kind: Service
