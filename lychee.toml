@@ -8,7 +8,11 @@ exclude = [
   # repository that exists, which is a false failure rather than a finding.
   # Narrow to exactly those five: every other link, including every standards
   # link the generated AGENTS.md section carries, is checked for real.
-  "^https://github\\.com/hannosirkel/(architecture|orange|orange-inventory|myskills|entpass)(/|$)",
+  #
+  # `architecture` is deliberately not among them any more. It is public, so
+  # every standards link the generated baseline carries is now checked for
+  # real -- which is the point of it being public.
+  "^https://github\\.com/hannosirkel/(orange|orange-inventory|myskills|entpass|portfolio-bot)(/|$)",
 ]
 
 # GitHub rate-limits anonymous requests hard enough to make a run flaky.
