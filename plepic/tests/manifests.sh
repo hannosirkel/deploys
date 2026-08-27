@@ -844,6 +844,19 @@ def assert_network_contract(documents, suffix)
 
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
   raise 'HTTPS egress policy type mismatch' unless https.dig('spec', 'policyTypes') == ['Egress']
+  # Omniva's shipment API rides this rule rather than a rule of its own — see
+  # networkpolicy.yaml: NetworkPolicy has no DNS-name peer and Omniva
+  # publishes no stable CIDR to pin a narrower rule to. Asserted here, ahead
+  # of and independent from the exact selector-list and egress-shape equality
+  # checks below, so a future edit dropping backend or worker from this
+  # selector — or narrowing the port this rule admits — fails a check that
+  # names Omniva as the reason, not only the general shape checks that would
+  # also (and separately) catch it.
+  https_components = https.dig('spec', 'podSelector', 'matchExpressions', 0, 'values')
+  raise 'backend and worker must keep general HTTPS egress for Omniva to stay reachable' unless
+    https_components && %w[backend worker].all? { |component| https_components.include?(component) }
+  raise 'the HTTPS egress rule Omniva rides on must still admit port 443' unless
+    https.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 443, 'protocol' => 'TCP' }]
   # `backup` is admitted here and `recovery` is not, and the difference is the
   # whole of what this list is for.
   #
@@ -2524,6 +2537,35 @@ assert_mutation_rejected(
   redis_egress.dig('spec', 'podSelector', 'matchExpressions').first['values'] = %w[backend worker]
 end
 
+# Omniva reachability rides allow-https-egress rather than a rule of its own
+# — see the assertion above and networkpolicy.yaml — so dropping worker from
+# that selector (backend stays, to isolate this from the "backup" mutation
+# below) is exactly the edit that would leave Omniva silently unreachable
+# from the worker with every other check still green. This is the guard that
+# is supposed to notice, before the general selector-shape check further down
+# would notice the same edit for an unrelated reason.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'worker dropped from the HTTPS egress rule Omniva rides on',
+  'backend and worker must keep general HTTPS egress for Omniva to stay reachable'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'podSelector', 'matchExpressions').first['values'] =
+    %w[backend storefront predeploy catalogue-import backup]
+end
+
+# The selector stays intact but the rule itself stops admitting 443 — the
+# other way this rule could stop carrying Omniva traffic while every workload
+# census above it stays green.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the HTTPS egress rule narrowed off port 443',
+  'the HTTPS egress rule Omniva rides on must still admit port 443'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'egress', 0, 'ports').first['port'] = 8443
+end
+
 # The exact state this repository shipped in before the `backup` component was
 # added: every workload that talks to the Internet admitted, and the one Job
 # whose entire purpose is to upload off-cluster left out. Nothing else notices —
@@ -3270,6 +3312,62 @@ assert_mutation_rejected(
   MERCHANT_STOREFRONT_DISCLOSURES.each do |name, value|
     backend.fetch('env') << { 'name' => name, 'value' => value }
   end
+end
+
+# MERCHANT_PHONE_NUMBER copied onto a workload that reads none of the three
+# values in MERCHANT_PHONE_NUMBER_VALUES. Without the census this is a fourth
+# home for a name the two images already disagree about the meaning of.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'MERCHANT_PHONE_NUMBER copied onto the predeploy Job',
+  'MERCHANT_PHONE_NUMBER must reach exactly storefront, backend and worker, each once, at its own value'
+) do |documents|
+  predeploy = pod_spec(resource(documents, 'Job', 'plepic-predeploy-test')).fetch('containers').first
+  predeploy.fetch('env') << { 'name' => 'MERCHANT_PHONE_NUMBER', 'value' => '+372 5555 0100' }
+end
+
+# The Omniva sender profile copied onto catalogue-import, which runs the same
+# backend image but never creates a shipment. Without the census this is how
+# a stray copy — read by nothing — becomes the place a later edit updates
+# instead of backend.yaml/worker.yaml.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva sender profile copied onto catalogue-import',
+  'the Omniva sender profile must be projected only to backend and worker'
+) do |documents|
+  import_job = pod_spec(resource(documents, 'Job', 'plepic-catalogue-import-test')).fetch('containers').first
+  OMNIVA_SENDER_ENVIRONMENT.each do |name|
+    import_job.fetch('env') << { 'name' => name, 'value' => 'copied' }
+  end
+end
+
+# The Omniva credential reference copied onto predeploy — a Secret reference
+# nothing there reads, and a second place the key set could silently drift
+# from backend.yaml/worker.yaml.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva credential copied onto the predeploy Job',
+  'the Omniva credential must be projected only to backend and worker, and every key optional'
+) do |documents|
+  predeploy = pod_spec(resource(documents, 'Job', 'plepic-predeploy-test')).fetch('containers').first
+  predeploy.fetch('env') << {
+    'name' => 'OMNIVA_API_USER',
+    'valueFrom' => { 'secretKeyRef' => { 'name' => 'plepic-omniva', 'key' => 'OMNIVA_API_USER', 'optional' => true } },
+  }
+end
+
+# The same credential, left on backend and worker alone but with `optional`
+# dropped from one key — the state that stops this namespace's pods from
+# starting at all until Omniva issues a key, which is the entire reason
+# `optional: true` is on every one of the three.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva credential required rather than optional on the backend',
+  'the Omniva credential must be projected only to backend and worker, and every key optional'
+) do |documents|
+  backend = pod_spec(resource(documents, 'Deployment', 'plepic-backend-test')).fetch('containers').first
+  entry = backend.fetch('env').find { |item| item['name'] == 'OMNIVA_API_USER' }
+  entry.dig('valueFrom', 'secretKeyRef').delete('optional')
 end
 
 # The identity drifting between the two images that resolve the same withdrawal
