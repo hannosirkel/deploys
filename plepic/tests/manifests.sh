@@ -324,29 +324,66 @@ MERCHANT_IDENTITY = {
   'MERCHANT_RETURN_ADDRESS' => 'Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301',
 }.freeze
 
-# The three disclosures no manifest in this repository used to declare, and the
+# The two disclosures no manifest in this repository used to declare, and the
 # one workload that reads them.
 #
 # Storefront only, and that is a fact about the images rather than a
 # preference. `backend/src/config/runtime.ts` requires the four above at module
-# scope and reads none of these three; `storefront/src/config/runtime-env.ts`
+# scope and reads neither of these two; `storefront/src/config/runtime-env.ts`
 # lists all seven. A copy on a backend-image workload would be a declaration
 # nothing reads and a second place a later edit could change instead of this
 # one — the same reasoning that keeps the three SITE_* variables on the
 # storefront alone.
 #
-# Absent, none of them fails: `storefront/src/config/runtime-config.ts`
+# Absent, neither fails: `storefront/src/config/runtime-config.ts`
 # resolves each to `null`, and `src/lib/configuration-placeholders.ts` renders
 # a named visible gap inside the imprint's prose plus a page-level
 # incompleteness notice. So the deployed failure mode was an imprint served to
 # every visitor announcing that it is missing a register code — which is also
 # why `content/schema.ts` refused to mark any legal page `operator-approved`
 # while these were undeclared.
+#
+# MERCHANT_PHONE_NUMBER used to be a third entry here, and is not any more.
+# Omniva's shipment API needs a sender phone for the consignment it creates,
+# so backend and worker now declare it too — see MERCHANT_PHONE_NUMBER_VALUES
+# below, which is the reason this dict's "storefront only" framing above no
+# longer covers it and the assertions below now treat it separately.
 MERCHANT_STOREFRONT_DISCLOSURES = {
   'MERCHANT_REGISTRATION_NUMBER' => '14663721',
   'MERCHANT_VAT_NUMBER' => 'EE102137075',
-  'MERCHANT_PHONE_NUMBER' => '+372 51 35463',
 }.freeze
+
+# MERCHANT_PHONE_NUMBER, unlike the two disclosures above, is legitimately
+# declared by three workloads at two different values: the storefront's is the
+# real registered contact number Article 6(1) CRD and VÕS § 54¹ oblige the
+# trader to publish (see MERCHANT_IDENTITY above), and backend/worker's is the
+# reserved placeholder Orange patches to the real Omniva sender phone per
+# environment (see OMNIVA_SENDER_ENVIRONMENT below) — a different value for a
+# different reader, sharing a name fixed by the backend image.
+MERCHANT_PHONE_NUMBER_VALUES = {
+  "plepic-storefront" => '+372 51 35463',
+  "plepic-backend" => '+372 5555 0100',
+  "plepic-worker" => '+372 5555 0100',
+}.freeze
+
+# Omniva's shipment API and the sender profile it needs for a consignment, all
+# five ordinary (non-secret) values Orange patches per environment — see
+# backend.yaml. Only backend and worker call Omniva, so only those two carry
+# any of it, not predeploy or catalogue-import, which run the same image but
+# never create a shipment.
+OMNIVA_SENDER_ENVIRONMENT = %w[
+  OMNIVA_BASE_URL
+  MERCHANT_SENDER_STREET
+  MERCHANT_SENDER_CITY
+  MERCHANT_SENDER_POSTCODE
+  MERCHANT_SENDER_COUNTRY
+].freeze
+
+# The Omniva credential's three keys, one Secret, `optional: true` on every
+# one. Without that a namespace holding no plepic-omniva Secret — every
+# namespace until Omniva issues a key — could not start backend or worker at
+# all.
+OMNIVA_CREDENTIAL_KEYS = %w[OMNIVA_API_USER OMNIVA_API_PASSWORD OMNIVA_CUSTOMER_CODE].freeze
 
 # The four external destinations the site's own copy links to, and the one
 # workload that reads them.
@@ -1389,7 +1426,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
   end
 
-  # The three legally required disclosures, which this repository declared
+  # The two legally required disclosures, which this repository declared
   # nowhere until now — see MERCHANT_STOREFRONT_DISCLOSURES.
   #
   # Read across every container of the storefront pod and required exactly
@@ -1397,8 +1434,8 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # in a sidecar wins at runtime and is invisible to a container-0 read. As a
   # literal and never a `valueFrom`, which the value comparison refuses on the
   # spot — an entry delivered by reference carries no `value` at all — and
-  # which the README's delivery constraint requires anyway: none of the three
-  # is a credential, and ESO is the wrong path for a public disclosure.
+  # which the README's delivery constraint requires anyway: neither is a
+  # credential, and ESO is the wrong path for a public disclosure.
   MERCHANT_STOREFRONT_DISCLOSURES.each do |name, expected|
     entries = storefront_containers.flat_map do |container|
       container.fetch('env', []).select { |entry| entry['name'] == name }
@@ -1419,6 +1456,61 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'the merchant disclosures only the storefront reads must reach only it' unless
     merchant_disclosure_consumers == {
       "plepic-storefront#{suffix}" => MERCHANT_STOREFRONT_DISCLOSURES.keys.sort,
+    }
+
+  # MERCHANT_PHONE_NUMBER, at the value each of its three readers requires —
+  # see MERCHANT_PHONE_NUMBER_VALUES — each exactly once, as a literal.
+  phone_number_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    entries = containers.flat_map { |container| container.fetch('env', []) }
+      .select { |entry| entry['name'] == 'MERCHANT_PHONE_NUMBER' }
+    [workload.dig('metadata', 'name'), entries] unless entries.empty?
+  end.to_h
+  expected_phone_number_consumers = MERCHANT_PHONE_NUMBER_VALUES.to_h do |workload, value|
+    ["#{workload}#{suffix}", [{ 'name' => 'MERCHANT_PHONE_NUMBER', 'value' => value }]]
+  end
+  raise 'MERCHANT_PHONE_NUMBER must reach exactly storefront, backend and worker, each once, at its own value' unless
+    phone_number_consumers == expected_phone_number_consumers
+
+  # Omniva's sender profile: five ordinary values, backend and worker only —
+  # see OMNIVA_SENDER_ENVIRONMENT.
+  omniva_sender_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    keys = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
+      entry['name'] if OMNIVA_SENDER_ENVIRONMENT.include?(entry['name'])
+    end.uniq.sort
+    [workload.dig('metadata', 'name'), keys] unless keys.empty?
+  end.to_h
+  raise 'the Omniva sender profile must be projected only to backend and worker' unless
+    omniva_sender_consumers == {
+      "plepic-backend#{suffix}" => OMNIVA_SENDER_ENVIRONMENT.sort,
+      "plepic-worker#{suffix}" => OMNIVA_SENDER_ENVIRONMENT.sort,
+    }
+  %W[plepic-backend#{suffix} plepic-worker#{suffix}].each do |name|
+    container = pod_spec(resource(documents, 'Deployment', name)).dig('containers', 0)
+    raise "#{name} must declare OMNIVA_BASE_URL as a reserved placeholder host" unless
+      URI(env_value(container, 'OMNIVA_BASE_URL')).host&.end_with?('.example.com')
+    raise "#{name} must declare a reserved Omniva sender street" unless
+      env_value(container, 'MERCHANT_SENDER_STREET').start_with?('Example ')
+  end
+
+  # The Omniva credential: three keys from one Secret, `optional: true` on
+  # every one, backend and worker only — see OMNIVA_CREDENTIAL_KEYS.
+  omniva_credential_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    refs = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
+      next unless OMNIVA_CREDENTIAL_KEYS.include?(entry['name'])
+      [entry['name'], entry.dig('valueFrom', 'secretKeyRef')]
+    end
+    [workload.dig('metadata', 'name'), refs.sort_by(&:first)] unless refs.empty?
+  end.to_h
+  expected_omniva_refs = OMNIVA_CREDENTIAL_KEYS.sort.map do |key|
+    [key, { 'name' => 'plepic-omniva', 'key' => key, 'optional' => true }]
+  end
+  raise 'the Omniva credential must be projected only to backend and worker, and every key optional' unless
+    omniva_credential_consumers == {
+      "plepic-backend#{suffix}" => expected_omniva_refs,
+      "plepic-worker#{suffix}" => expected_omniva_refs,
     }
 
   # The four external destinations, held to the same shape as the disclosures
@@ -1909,6 +2001,7 @@ live_options = {
     'plepic-publishable-key' => ['publishableKey'],
     'plepic-redirect-map' => ['redirect-map.json'],
     'plepic-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
+    'plepic-omniva' => OMNIVA_CREDENTIAL_KEYS,
   },
   pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
   resources: live_resources,
@@ -1930,6 +2023,13 @@ test_options = {
     'plepic-test-publishable-key' => ['publishableKey'],
     'plepic-test-redirect-map' => ['redirect-map.json'],
     'plepic-test-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
+    # Unsuffixed, unlike every other secret above -- deliberately. Omniva is
+    # live only (see OMNIVA_CREDENTIAL_KEYS), so there is no
+    # plepic-test-omniva ExternalSecret for the test overlay to patch this
+    # reference onto, and none should ever be added: the test namespace is
+    # meant to hold no Secret named either way until Omniva issues a key,
+    # which is exactly what `optional: true` is for.
+    'plepic-omniva' => OMNIVA_CREDENTIAL_KEYS,
   },
   pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
   resources: test_resources,
@@ -1948,6 +2048,13 @@ test = assert_manifest(ARGV.fetch(1), **test_options)
 
 %i[names pvcs secrets services ports databases].each do |boundary|
   overlap = live.fetch(boundary) & test.fetch(boundary)
+  # plepic-omniva is the one deliberate exception, and only for this boundary.
+  # Omniva is live only (see OMNIVA_CREDENTIAL_KEYS above), so there is no
+  # plepic-test-omniva Secret for the test overlay to reference instead, and
+  # both namespaces name the very same not-yet-created Secret on purpose —
+  # `optional: true` is what makes that safe rather than a namespace leak.
+  # Every other name in every other boundary must still be exclusive.
+  overlap -= Set['plepic-omniva'] if boundary == :secrets
   raise "live and test share #{boundary}: #{overlap.to_a.inspect}" unless overlap.empty?
 end
 
@@ -3150,7 +3257,7 @@ assert_mutation_rejected(
   end
 end
 
-# The three copied onto a backend-image workload, at the correct values. Every
+# The two copied onto a backend-image workload, at the correct values. Every
 # value assertion is satisfied; only the consumer census refuses it. Without
 # that census this is how a second home for the merchant disclosures appears,
 # and the next edit updates one of the two.

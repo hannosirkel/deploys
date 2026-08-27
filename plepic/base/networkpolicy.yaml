@@ -190,6 +190,15 @@ spec:
   # decrypts its object on the Ansible controller and mounts it into the Job
   # from a hostPath, so a `recovery` Pod needs 5432 and nothing else, and this
   # peer is `0.0.0.0/0`.
+  #
+  # This is also how `backend` and `worker` reach Omniva's shipment API
+  # (`omx.omniva.eu`, `test-omx.omniva.eu`, `www.omniva.ee`) on 443. There is
+  # no separate Omniva rule: NetworkPolicy has no notion of a DNS name, only
+  # `ipBlock`/`podSelector`/`namespaceSelector` peers, and Omniva publishes no
+  # stable CIDR to pin instead — a `dig`-and-pin rule would drift out of sync
+  # with whatever address their DNS answers on any given day. `backend` and
+  # `worker` already carry general outbound HTTPS through this rule, which is
+  # what makes Omniva reachable; nothing below needs to name it specially.
   podSelector:
     matchExpressions:
       - key: app.kubernetes.io/component
