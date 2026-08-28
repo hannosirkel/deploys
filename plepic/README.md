@@ -110,12 +110,12 @@ provider queries it during module initialization. The ordering
 deny would revoke it again, while removing `-@dangerous` would unnecessarily
 widen the Redis command surface.
 
-The predeploy Job mounts one `emptyDir` at **ten** paths inside the image, each
+The predeploy Job mounts one `emptyDir` at **eleven** paths inside the image, each
 with its own `subPath` and each `readOnly`. `medusa db:migrate` runs Mikro-ORM's
 Migrator, and `Migrator.up()` calls `ensureMigrationsDirExists()` at least once
 for every module **and** every provider it loads — each gets its own migrations
-directory, derived from its own discovery path, which is what makes seven of the
-ten entries providers rather than modules. It is more often than once each:
+directory, derived from its own discovery path, which is what makes eight of the
+eleven entries providers rather than modules. It is more often than once each:
 `migrationScripts` in `@medusajs/modules-sdk`'s `load-internal.js` accumulates
 across loaded services and the build loop re-walks the whole accumulator on every
 pass, so a module with one provider builds three migration functions rather than
@@ -141,8 +141,15 @@ error log.** The log names only the *first* missing directory per module, so
 `notification-local`: `backend/medusa-config.ts` loads
 `notificationModule(runtime.smtp)`, whose provider resolves to
 `./src/notifications` — the application's own SMTP provider, which ships no
-`migrations` directory and lives under `/app` rather than `/node_modules`.
-Adding a module or provider whose package ships no migrations directory
+`migrations` directory and lives under `/app` rather than `/node_modules`. The
+Omniva fulfillment provider is the same shape a second time:
+`medusa-config.ts` declares it in the `@medusajs/medusa/fulfillment` module's
+`providers` array as `resolve: "./src/modules/omniva"`, and it too ships no
+`migrations` directory. A reader who checks only the `/node_modules` entries
+for what needs a mount will miss both of these — any provider or module a
+future change adds under `backend/src/modules/`, not only
+`backend/src/notifications`, is application-owned the same way and lands here
+too. Adding a module or provider whose package ships no migrations directory
 reproduces the failure and needs another entry in both `base/predeploy-job.yaml`
 and `tests/manifests.sh`.
 

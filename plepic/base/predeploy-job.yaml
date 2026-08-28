@@ -105,13 +105,13 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
-            # Ten empty directories, one `emptyDir` and ten `subPath`s.
+            # Eleven empty directories, one `emptyDir` and eleven `subPath`s.
             #
             # `medusa db:migrate` runs Mikro-ORM's Migrator, and `Migrator.up()`
             # calls `ensureMigrationsDirExists()` at least once for every module
             # *and* every provider it loads — each gets its own migrations
-            # directory, derived from its own discovery path, which is why seven
-            # of the ten entries below are providers rather than modules. It is
+            # directory, derived from its own discovery path, which is why eight
+            # of the eleven entries below are providers rather than modules. It is
             # more often than once each: `migrationScripts` in
             # `@medusajs/modules-sdk`'s `load-internal.js` accumulates across
             # loaded services and the build loop re-walks the whole accumulator
@@ -139,10 +139,18 @@ spec:
             # — `backend/medusa-config.ts` loads `notificationModule(runtime.smtp)`,
             # whose provider resolves to `./src/notifications`, the
             # application's own SMTP provider, which ships no `migrations`
-            # directory and lives under `/app` rather than `/node_modules`.
-            # Adding a module or provider whose package ships no migrations
-            # directory reproduces the failure and needs another entry here and
-            # in `plepic/tests/manifests.sh`.
+            # directory and lives under `/app` rather than `/node_modules`. The
+            # Omniva fulfillment provider is the same shape a second time:
+            # `medusa-config.ts` declares it in the `@medusajs/medusa/fulfillment`
+            # module's `providers` array as `resolve: "./src/modules/omniva"`,
+            # and it too ships no `migrations` directory. A reader who audits
+            # only the `/node_modules` entries above for what needs a mount will
+            # miss both of these — any provider or module a future change adds
+            # under `backend/src/modules/`, not only `backend/src/notifications`,
+            # is application-owned in the same way and lands here too. Adding a
+            # module or provider whose package ships no migrations directory
+            # reproduces the failure and needs another entry here and in
+            # `plepic/tests/manifests.sh`.
             #
             # Only this Job needs them. The two Deployments and the import Job
             # run the same image and never invoke the Migrator; the test suite
@@ -157,6 +165,7 @@ spec:
             - {name: module-migrations, mountPath: /node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
             - {name: module-migrations, mountPath: /node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
             - {name: module-migrations, mountPath: /app/src/notifications/migrations, subPath: notifications, readOnly: true}
+            - {name: module-migrations, mountPath: /app/src/modules/omniva/migrations, subPath: omniva, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}

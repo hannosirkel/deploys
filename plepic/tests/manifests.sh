@@ -590,12 +590,12 @@ def assert_pod_hardening(document)
 end
 
 # The one volume that gives `medusa db:migrate` the directories the Migrator
-# insists on, and the ten places it is mounted.
+# insists on, and the eleven places it is mounted.
 #
 # Mikro-ORM's `Migrator.up()` calls `ensureMigrationsDirExists()` at least once
 # for every module *and* every provider it loads — each gets its own migrations
-# directory, derived from its own discovery path, which is why seven of the ten
-# entries below are providers rather than modules. It is more often than once
+# directory, derived from its own discovery path, which is why eight of the
+# eleven entries below are providers rather than modules. It is more often than once
 # each: `migrationScripts` in `@medusajs/modules-sdk`'s `load-internal.js`
 # accumulates across loaded services and the build loop re-walks the whole
 # accumulator each pass. The count is not what matters here.
@@ -615,7 +615,13 @@ end
 # `notification-local`: `backend/medusa-config.ts` loads
 # `notificationModule(runtime.smtp)`, whose provider resolves to
 # `./src/notifications` — the application's own SMTP provider, which ships no
-# `migrations` directory and lives under `/app`, not `/node_modules`. Adding a
+# `migrations` directory and lives under `/app`, not `/node_modules`. The Omniva
+# fulfillment provider is the same shape a second time: `medusa-config.ts`
+# declares it in the `@medusajs/medusa/fulfillment` module's `providers` array
+# as `resolve: "./src/modules/omniva"`, and it too ships no `migrations`
+# directory. Any provider or module a future change adds under
+# `backend/src/modules/`, not only `backend/src/notifications`, is
+# application-owned in the same way and needs the same treatment. Adding a
 # provider or module whose package ships no migrations directory reproduces the
 # failure and needs another entry here and in `plepic/base/predeploy-job.yaml`.
 MIGRATIONS_VOLUME = 'module-migrations'.freeze
@@ -630,10 +636,11 @@ MIGRATIONS_DIRECTORIES = [
   ['file', '/node_modules/@medusajs/file/dist/migrations'],
   ['file-local', '/node_modules/@medusajs/file-local/dist/migrations'],
   ['notifications', '/app/src/notifications/migrations'],
+  ['omniva', '/app/src/modules/omniva/migrations'],
 ].freeze
 
 # Controls on the table itself, before anything is compared against it. One
-# `emptyDir` reaching ten paths only works if every mount takes a distinct
+# `emptyDir` reaching eleven paths only works if every mount takes a distinct
 # `subPath`: two mounts sharing one would give the migrator two names for one
 # directory, and a duplicate written here would be invisible to an equality test
 # that compared the manifest to this same list.
@@ -649,7 +656,7 @@ def assert_migration_directories(documents, predeploy)
   end
   # Selected by volume name *or* by mount path, so the comparison is two-sided: a
   # missing, writable, misdirected or subPath-less entry fails it, and so does a
-  # second volume quietly taking over one of the ten paths while the named ones
+  # second volume quietly taking over one of the eleven paths while the named ones
   # still look right.
   migration_paths = MIGRATIONS_DIRECTORIES.map(&:last)
   actual_mounts = pod_containers(pod).flat_map do |container|
@@ -666,7 +673,7 @@ def assert_migration_directories(documents, predeploy)
   # Relaxing the root filesystem is the *other* way to make this failure
   # disappear, and it is rejected: this Job holds the admin, database, Stripe and
   # JWT secrets and is the worst container in the deployment to soften. Nothing
-  # above would notice — ten mounted directories and a writable root satisfy
+  # above would notice — eleven mounted directories and a writable root satisfy
   # every assertion in this method — so the coupling is stated here where the
   # remedy is, rather than left implicit.
   #
@@ -2198,10 +2205,10 @@ assert_mutation_rejected(
     { 'name' => 'MEDUSA_WORKER_MODE', 'value' => 'server' }
 end
 
-# The failure mode the ten paths exist for, in the form it will actually recur:
-# a list shortened to what the error log printed. `locking` is one of the two
-# entries the log hides behind an earlier sibling, so dropping it is exactly the
-# edit a future reader working from the log would make.
+# The failure mode the eleven paths exist for, in the form it will actually
+# recur: a list shortened to what the error log printed. `locking` is one of
+# the two entries the log hides behind an earlier sibling, so dropping it is
+# exactly the edit a future reader working from the log would make.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'a module migrations directory dropped from the mount set',
@@ -2210,6 +2217,25 @@ assert_mutation_rejected(
   predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
   pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
     .reject! { |mount| mount['mountPath'] == '/node_modules/@medusajs/locking/dist/migrations' }
+end
+
+# The specific entry this defect was found and fixed for: the predeploy Job's
+# log ended in `mkdir '/app/src/modules/omniva/migrations'`, because the
+# Omniva fulfillment provider — the second application-owned provider, after
+# `/app/src/notifications` — had no writable directory to report itself up to
+# date into. Kept separate from the `locking` case above, which exercises the
+# generic "list shortened to the log" failure mode; this one exercises the
+# specific entry that motivated adding an eleventh, so a future edit that
+# re-shortens the list back toward what some future log printed cannot drop
+# this entry and still pass.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva migrations directory dropped from the mount set',
+  'predeploy module migrations mount contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
+    .reject! { |mount| mount['mountPath'] == '/app/src/modules/omniva/migrations' }
 end
 
 # Writable directories inside a package tree, for a command that only reads
@@ -2226,10 +2252,10 @@ assert_mutation_rejected(
 end
 
 # Every mount pointed at the same `emptyDir` root. Nothing about the pod's shape
-# objects — one volume, ten paths, all read-only — and the migrator would still
-# find ten empty directories today. It is refused because they are then one
-# directory under ten names, so the first module to ship migrations into its own
-# subtree would find another module's.
+# objects — one volume, eleven paths, all read-only — and the migrator would
+# still find eleven empty directories today. It is refused because they are
+# then one directory under eleven names, so the first module to ship
+# migrations into its own subtree would find another module's.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'the module migrations mounts collapsed onto one shared subPath',
@@ -2243,8 +2269,8 @@ end
 
 # A backing store that outlives the Job. These directories are scratch by
 # definition — they exist so a glob finds nothing — and backing them with the
-# assets PVC would put ten empty directories in the volume that serves media and
-# stages imports.
+# assets PVC would put eleven empty directories in the volume that serves media
+# and stages imports.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'the module migrations volume backed by the assets PVC',
