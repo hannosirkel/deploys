@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>hannosirkel/architecture//templates/default"]
+  "extends": ["local>hannosirkel/architecture//templates/default"],
+  "packageRules": [
+    {
+      "description": "A first-party image is promoted here by its application's release workflow, by digest, never by Renovate. It carries no moving tag, so the kustomize manager resolves a digest-only pin against :latest, which these packages do not publish, and every run reports a lookup failure. See AGENTS.md, 'Promotion and rollback'. Third-party base images keep updating.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/hannosirkel/**"],
+      "enabled": false
+    }
+  ]
 }
