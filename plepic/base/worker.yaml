@@ -77,12 +77,35 @@ spec:
             - {name: MERCHANT_REGISTERED_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
             - {name: MERCHANT_CONTACT_ADDRESS, value: info@plepicgames.com}
             - {name: MERCHANT_RETURN_ADDRESS, value: "Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301"}
+            # Omniva's shipment API and the sender profile it needs for a
+            # consignment: a base URL that differs live vs. test, and the pickup
+            # address and phone Omniva shows the carrier and the recipient. All
+            # five are reserved placeholders, like SITE_BASE_URL above and unlike
+            # the MERCHANT_* block above -- Orange patches the real per-environment
+            # values in, the same way it patches SMTP_HOST.
+            - {name: OMNIVA_BASE_URL, value: "https://omniva.example.com"}
+            - {name: MERCHANT_SENDER_STREET, value: "Example Street 1"}
+            - {name: MERCHANT_SENDER_CITY, value: "Example City"}
+            - {name: MERCHANT_SENDER_POSTCODE, value: "00000"}
+            - {name: MERCHANT_SENDER_COUNTRY, value: EE}
+            - {name: MERCHANT_PHONE_NUMBER, value: "+372 5555 0100"}
             - name: SMTP_USERNAME
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_USERNAME}}
             - name: SMTP_PASSWORD
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: SMTP_PASSWORD}}
             - name: TURNSTILE_SECRET_KEY
               valueFrom: {secretKeyRef: {name: plepic-runtime-credentials, key: TURNSTILE_SECRET_KEY}}
+            # optional: true on all three. Omniva has not issued a test key yet
+            # (see roles/argocd/defaults/main.yml in orange), so the plepic-test
+            # namespace holds no plepic-omniva Secret at all -- a required
+            # secretKeyRef here would leave this Deployment unable to start any
+            # pod in that namespace until Omniva issues one.
+            - name: OMNIVA_API_USER
+              valueFrom: {secretKeyRef: {name: plepic-omniva, key: OMNIVA_API_USER, optional: true}}
+            - name: OMNIVA_API_PASSWORD
+              valueFrom: {secretKeyRef: {name: plepic-omniva, key: OMNIVA_API_PASSWORD, optional: true}}
+            - name: OMNIVA_CUSTOMER_CODE
+              valueFrom: {secretKeyRef: {name: plepic-omniva, key: OMNIVA_CUSTOMER_CODE, optional: true}}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}

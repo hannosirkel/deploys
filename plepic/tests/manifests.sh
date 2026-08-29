@@ -324,29 +324,66 @@ MERCHANT_IDENTITY = {
   'MERCHANT_RETURN_ADDRESS' => 'Harju maakond, Rae vald, Jüri alevik, Pihlaka tn 2, 75301',
 }.freeze
 
-# The three disclosures no manifest in this repository used to declare, and the
+# The two disclosures no manifest in this repository used to declare, and the
 # one workload that reads them.
 #
 # Storefront only, and that is a fact about the images rather than a
 # preference. `backend/src/config/runtime.ts` requires the four above at module
-# scope and reads none of these three; `storefront/src/config/runtime-env.ts`
+# scope and reads neither of these two; `storefront/src/config/runtime-env.ts`
 # lists all seven. A copy on a backend-image workload would be a declaration
 # nothing reads and a second place a later edit could change instead of this
 # one — the same reasoning that keeps the three SITE_* variables on the
 # storefront alone.
 #
-# Absent, none of them fails: `storefront/src/config/runtime-config.ts`
+# Absent, neither fails: `storefront/src/config/runtime-config.ts`
 # resolves each to `null`, and `src/lib/configuration-placeholders.ts` renders
 # a named visible gap inside the imprint's prose plus a page-level
 # incompleteness notice. So the deployed failure mode was an imprint served to
 # every visitor announcing that it is missing a register code — which is also
 # why `content/schema.ts` refused to mark any legal page `operator-approved`
 # while these were undeclared.
+#
+# MERCHANT_PHONE_NUMBER used to be a third entry here, and is not any more.
+# Omniva's shipment API needs a sender phone for the consignment it creates,
+# so backend and worker now declare it too — see MERCHANT_PHONE_NUMBER_VALUES
+# below, which is the reason this dict's "storefront only" framing above no
+# longer covers it and the assertions below now treat it separately.
 MERCHANT_STOREFRONT_DISCLOSURES = {
   'MERCHANT_REGISTRATION_NUMBER' => '14663721',
   'MERCHANT_VAT_NUMBER' => 'EE102137075',
-  'MERCHANT_PHONE_NUMBER' => '+372 51 35463',
 }.freeze
+
+# MERCHANT_PHONE_NUMBER, unlike the two disclosures above, is legitimately
+# declared by three workloads at two different values: the storefront's is the
+# real registered contact number Article 6(1) CRD and VÕS § 54¹ oblige the
+# trader to publish (see MERCHANT_IDENTITY above), and backend/worker's is the
+# reserved placeholder Orange patches to the real Omniva sender phone per
+# environment (see OMNIVA_SENDER_ENVIRONMENT below) — a different value for a
+# different reader, sharing a name fixed by the backend image.
+MERCHANT_PHONE_NUMBER_VALUES = {
+  "plepic-storefront" => '+372 51 35463',
+  "plepic-backend" => '+372 5555 0100',
+  "plepic-worker" => '+372 5555 0100',
+}.freeze
+
+# Omniva's shipment API and the sender profile it needs for a consignment, all
+# five ordinary (non-secret) values Orange patches per environment — see
+# backend.yaml. Only backend and worker call Omniva, so only those two carry
+# any of it, not predeploy or catalogue-import, which run the same image but
+# never create a shipment.
+OMNIVA_SENDER_ENVIRONMENT = %w[
+  OMNIVA_BASE_URL
+  MERCHANT_SENDER_STREET
+  MERCHANT_SENDER_CITY
+  MERCHANT_SENDER_POSTCODE
+  MERCHANT_SENDER_COUNTRY
+].freeze
+
+# The Omniva credential's three keys, one Secret, `optional: true` on every
+# one. Without that a namespace holding no plepic-omniva Secret — every
+# namespace until Omniva issues a key — could not start backend or worker at
+# all.
+OMNIVA_CREDENTIAL_KEYS = %w[OMNIVA_API_USER OMNIVA_API_PASSWORD OMNIVA_CUSTOMER_CODE].freeze
 
 # The four external destinations the site's own copy links to, and the one
 # workload that reads them.
@@ -553,12 +590,12 @@ def assert_pod_hardening(document)
 end
 
 # The one volume that gives `medusa db:migrate` the directories the Migrator
-# insists on, and the ten places it is mounted.
+# insists on, and the eleven places it is mounted.
 #
 # Mikro-ORM's `Migrator.up()` calls `ensureMigrationsDirExists()` at least once
 # for every module *and* every provider it loads — each gets its own migrations
-# directory, derived from its own discovery path, which is why seven of the ten
-# entries below are providers rather than modules. It is more often than once
+# directory, derived from its own discovery path, which is why eight of the
+# eleven entries below are providers rather than modules. It is more often than once
 # each: `migrationScripts` in `@medusajs/modules-sdk`'s `load-internal.js`
 # accumulates across loaded services and the build loop re-walks the whole
 # accumulator each pass. The count is not what matters here.
@@ -578,7 +615,13 @@ end
 # `notification-local`: `backend/medusa-config.ts` loads
 # `notificationModule(runtime.smtp)`, whose provider resolves to
 # `./src/notifications` — the application's own SMTP provider, which ships no
-# `migrations` directory and lives under `/app`, not `/node_modules`. Adding a
+# `migrations` directory and lives under `/app`, not `/node_modules`. The Omniva
+# fulfillment provider is the same shape a second time: `medusa-config.ts`
+# declares it in the `@medusajs/medusa/fulfillment` module's `providers` array
+# as `resolve: "./src/modules/omniva"`, and it too ships no `migrations`
+# directory. Any provider or module a future change adds under
+# `backend/src/modules/`, not only `backend/src/notifications`, is
+# application-owned in the same way and needs the same treatment. Adding a
 # provider or module whose package ships no migrations directory reproduces the
 # failure and needs another entry here and in `plepic/base/predeploy-job.yaml`.
 MIGRATIONS_VOLUME = 'module-migrations'.freeze
@@ -593,10 +636,11 @@ MIGRATIONS_DIRECTORIES = [
   ['file', '/node_modules/@medusajs/file/dist/migrations'],
   ['file-local', '/node_modules/@medusajs/file-local/dist/migrations'],
   ['notifications', '/app/src/notifications/migrations'],
+  ['omniva', '/app/src/modules/omniva/migrations'],
 ].freeze
 
 # Controls on the table itself, before anything is compared against it. One
-# `emptyDir` reaching ten paths only works if every mount takes a distinct
+# `emptyDir` reaching eleven paths only works if every mount takes a distinct
 # `subPath`: two mounts sharing one would give the migrator two names for one
 # directory, and a duplicate written here would be invisible to an equality test
 # that compared the manifest to this same list.
@@ -612,7 +656,7 @@ def assert_migration_directories(documents, predeploy)
   end
   # Selected by volume name *or* by mount path, so the comparison is two-sided: a
   # missing, writable, misdirected or subPath-less entry fails it, and so does a
-  # second volume quietly taking over one of the ten paths while the named ones
+  # second volume quietly taking over one of the eleven paths while the named ones
   # still look right.
   migration_paths = MIGRATIONS_DIRECTORIES.map(&:last)
   actual_mounts = pod_containers(pod).flat_map do |container|
@@ -629,7 +673,7 @@ def assert_migration_directories(documents, predeploy)
   # Relaxing the root filesystem is the *other* way to make this failure
   # disappear, and it is rejected: this Job holds the admin, database, Stripe and
   # JWT secrets and is the worst container in the deployment to soften. Nothing
-  # above would notice — ten mounted directories and a writable root satisfy
+  # above would notice — eleven mounted directories and a writable root satisfy
   # every assertion in this method — so the coupling is stated here where the
   # remedy is, rather than left implicit.
   #
@@ -807,6 +851,19 @@ def assert_network_contract(documents, suffix)
 
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
   raise 'HTTPS egress policy type mismatch' unless https.dig('spec', 'policyTypes') == ['Egress']
+  # Omniva's shipment API rides this rule rather than a rule of its own — see
+  # networkpolicy.yaml: NetworkPolicy has no DNS-name peer and Omniva
+  # publishes no stable CIDR to pin a narrower rule to. Asserted here, ahead
+  # of and independent from the exact selector-list and egress-shape equality
+  # checks below, so a future edit dropping backend or worker from this
+  # selector — or narrowing the port this rule admits — fails a check that
+  # names Omniva as the reason, not only the general shape checks that would
+  # also (and separately) catch it.
+  https_components = https.dig('spec', 'podSelector', 'matchExpressions', 0, 'values')
+  raise 'backend and worker must keep general HTTPS egress for Omniva to stay reachable' unless
+    https_components && %w[backend worker].all? { |component| https_components.include?(component) }
+  raise 'the HTTPS egress rule Omniva rides on must still admit port 443' unless
+    https.dig('spec', 'egress', 0, 'ports') == [{ 'port' => 443, 'protocol' => 'TCP' }]
   # `backup` is admitted here and `recovery` is not, and the difference is the
   # whole of what this list is for.
   #
@@ -1389,7 +1446,7 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
     raise "storefront #{name} mismatch" unless entries.map { |entry| entry['value'] } == [expected]
   end
 
-  # The three legally required disclosures, which this repository declared
+  # The two legally required disclosures, which this repository declared
   # nowhere until now — see MERCHANT_STOREFRONT_DISCLOSURES.
   #
   # Read across every container of the storefront pod and required exactly
@@ -1397,8 +1454,8 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   # in a sidecar wins at runtime and is invisible to a container-0 read. As a
   # literal and never a `valueFrom`, which the value comparison refuses on the
   # spot — an entry delivered by reference carries no `value` at all — and
-  # which the README's delivery constraint requires anyway: none of the three
-  # is a credential, and ESO is the wrong path for a public disclosure.
+  # which the README's delivery constraint requires anyway: neither is a
+  # credential, and ESO is the wrong path for a public disclosure.
   MERCHANT_STOREFRONT_DISCLOSURES.each do |name, expected|
     entries = storefront_containers.flat_map do |container|
       container.fetch('env', []).select { |entry| entry['name'] == name }
@@ -1419,6 +1476,61 @@ def assert_manifest(path, environment:, namespace:, suffix:, ports:, database:, 
   raise 'the merchant disclosures only the storefront reads must reach only it' unless
     merchant_disclosure_consumers == {
       "plepic-storefront#{suffix}" => MERCHANT_STOREFRONT_DISCLOSURES.keys.sort,
+    }
+
+  # MERCHANT_PHONE_NUMBER, at the value each of its three readers requires —
+  # see MERCHANT_PHONE_NUMBER_VALUES — each exactly once, as a literal.
+  phone_number_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    entries = containers.flat_map { |container| container.fetch('env', []) }
+      .select { |entry| entry['name'] == 'MERCHANT_PHONE_NUMBER' }
+    [workload.dig('metadata', 'name'), entries] unless entries.empty?
+  end.to_h
+  expected_phone_number_consumers = MERCHANT_PHONE_NUMBER_VALUES.to_h do |workload, value|
+    ["#{workload}#{suffix}", [{ 'name' => 'MERCHANT_PHONE_NUMBER', 'value' => value }]]
+  end
+  raise 'MERCHANT_PHONE_NUMBER must reach exactly storefront, backend and worker, each once, at its own value' unless
+    phone_number_consumers == expected_phone_number_consumers
+
+  # Omniva's sender profile: five ordinary values, backend and worker only —
+  # see OMNIVA_SENDER_ENVIRONMENT.
+  omniva_sender_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    keys = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
+      entry['name'] if OMNIVA_SENDER_ENVIRONMENT.include?(entry['name'])
+    end.uniq.sort
+    [workload.dig('metadata', 'name'), keys] unless keys.empty?
+  end.to_h
+  raise 'the Omniva sender profile must be projected only to backend and worker' unless
+    omniva_sender_consumers == {
+      "plepic-backend#{suffix}" => OMNIVA_SENDER_ENVIRONMENT.sort,
+      "plepic-worker#{suffix}" => OMNIVA_SENDER_ENVIRONMENT.sort,
+    }
+  %W[plepic-backend#{suffix} plepic-worker#{suffix}].each do |name|
+    container = pod_spec(resource(documents, 'Deployment', name)).dig('containers', 0)
+    raise "#{name} must declare OMNIVA_BASE_URL as a reserved placeholder host" unless
+      URI(env_value(container, 'OMNIVA_BASE_URL')).host&.end_with?('.example.com')
+    raise "#{name} must declare a reserved Omniva sender street" unless
+      env_value(container, 'MERCHANT_SENDER_STREET').start_with?('Example ')
+  end
+
+  # The Omniva credential: three keys from one Secret, `optional: true` on
+  # every one, backend and worker only — see OMNIVA_CREDENTIAL_KEYS.
+  omniva_credential_consumers = workloads(documents).filter_map do |workload|
+    containers = pod_containers(pod_spec(workload))
+    refs = containers.flat_map { |container| container.fetch('env', []) }.filter_map do |entry|
+      next unless OMNIVA_CREDENTIAL_KEYS.include?(entry['name'])
+      [entry['name'], entry.dig('valueFrom', 'secretKeyRef')]
+    end
+    [workload.dig('metadata', 'name'), refs.sort_by(&:first)] unless refs.empty?
+  end.to_h
+  expected_omniva_refs = OMNIVA_CREDENTIAL_KEYS.sort.map do |key|
+    [key, { 'name' => 'plepic-omniva', 'key' => key, 'optional' => true }]
+  end
+  raise 'the Omniva credential must be projected only to backend and worker, and every key optional' unless
+    omniva_credential_consumers == {
+      "plepic-backend#{suffix}" => expected_omniva_refs,
+      "plepic-worker#{suffix}" => expected_omniva_refs,
     }
 
   # The four external destinations, held to the same shape as the disclosures
@@ -1909,6 +2021,7 @@ live_options = {
     'plepic-publishable-key' => ['publishableKey'],
     'plepic-redirect-map' => ['redirect-map.json'],
     'plepic-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
+    'plepic-omniva' => OMNIVA_CREDENTIAL_KEYS,
   },
   pvc_sizes: { 'postgresql' => '20Gi', 'redis' => '2Gi', 'assets' => '10Gi' },
   resources: live_resources,
@@ -1930,6 +2043,13 @@ test_options = {
     'plepic-test-publishable-key' => ['publishableKey'],
     'plepic-test-redirect-map' => ['redirect-map.json'],
     'plepic-test-import-expectation' => ['CATALOGUE_IMPORT_ARCHIVE_SHA256'],
+    # Unsuffixed, unlike every other secret above -- deliberately. Omniva is
+    # live only (see OMNIVA_CREDENTIAL_KEYS), so there is no
+    # plepic-test-omniva ExternalSecret for the test overlay to patch this
+    # reference onto, and none should ever be added: the test namespace is
+    # meant to hold no Secret named either way until Omniva issues a key,
+    # which is exactly what `optional: true` is for.
+    'plepic-omniva' => OMNIVA_CREDENTIAL_KEYS,
   },
   pvc_sizes: { 'postgresql' => '5Gi', 'redis' => '1Gi', 'assets' => '2Gi' },
   resources: test_resources,
@@ -1948,6 +2068,13 @@ test = assert_manifest(ARGV.fetch(1), **test_options)
 
 %i[names pvcs secrets services ports databases].each do |boundary|
   overlap = live.fetch(boundary) & test.fetch(boundary)
+  # plepic-omniva is the one deliberate exception, and only for this boundary.
+  # Omniva is live only (see OMNIVA_CREDENTIAL_KEYS above), so there is no
+  # plepic-test-omniva Secret for the test overlay to reference instead, and
+  # both namespaces name the very same not-yet-created Secret on purpose —
+  # `optional: true` is what makes that safe rather than a namespace leak.
+  # Every other name in every other boundary must still be exclusive.
+  overlap -= Set['plepic-omniva'] if boundary == :secrets
   raise "live and test share #{boundary}: #{overlap.to_a.inspect}" unless overlap.empty?
 end
 
@@ -2078,10 +2205,10 @@ assert_mutation_rejected(
     { 'name' => 'MEDUSA_WORKER_MODE', 'value' => 'server' }
 end
 
-# The failure mode the ten paths exist for, in the form it will actually recur:
-# a list shortened to what the error log printed. `locking` is one of the two
-# entries the log hides behind an earlier sibling, so dropping it is exactly the
-# edit a future reader working from the log would make.
+# The failure mode the eleven paths exist for, in the form it will actually
+# recur: a list shortened to what the error log printed. `locking` is one of
+# the two entries the log hides behind an earlier sibling, so dropping it is
+# exactly the edit a future reader working from the log would make.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'a module migrations directory dropped from the mount set',
@@ -2090,6 +2217,25 @@ assert_mutation_rejected(
   predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
   pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
     .reject! { |mount| mount['mountPath'] == '/node_modules/@medusajs/locking/dist/migrations' }
+end
+
+# The specific entry this defect was found and fixed for: the predeploy Job's
+# log ended in `mkdir '/app/src/modules/omniva/migrations'`, because the
+# Omniva fulfillment provider — the second application-owned provider, after
+# `/app/src/notifications` — had no writable directory to report itself up to
+# date into. Kept separate from the `locking` case above, which exercises the
+# generic "list shortened to the log" failure mode; this one exercises the
+# specific entry that motivated adding an eleventh, so a future edit that
+# re-shortens the list back toward what some future log printed cannot drop
+# this entry and still pass.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva migrations directory dropped from the mount set',
+  'predeploy module migrations mount contract mismatch'
+) do |documents|
+  predeploy = resource(documents, 'Job', 'plepic-predeploy-test')
+  pod_spec(predeploy).fetch('containers').first.fetch('volumeMounts')
+    .reject! { |mount| mount['mountPath'] == '/app/src/modules/omniva/migrations' }
 end
 
 # Writable directories inside a package tree, for a command that only reads
@@ -2106,10 +2252,10 @@ assert_mutation_rejected(
 end
 
 # Every mount pointed at the same `emptyDir` root. Nothing about the pod's shape
-# objects — one volume, ten paths, all read-only — and the migrator would still
-# find ten empty directories today. It is refused because they are then one
-# directory under ten names, so the first module to ship migrations into its own
-# subtree would find another module's.
+# objects — one volume, eleven paths, all read-only — and the migrator would
+# still find eleven empty directories today. It is refused because they are
+# then one directory under eleven names, so the first module to ship
+# migrations into its own subtree would find another module's.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'the module migrations mounts collapsed onto one shared subPath',
@@ -2123,8 +2269,8 @@ end
 
 # A backing store that outlives the Job. These directories are scratch by
 # definition — they exist so a glob finds nothing — and backing them with the
-# assets PVC would put ten empty directories in the volume that serves media and
-# stages imports.
+# assets PVC would put eleven empty directories in the volume that serves media
+# and stages imports.
 assert_mutation_rejected(
   ARGV.fetch(1), test_options,
   'the module migrations volume backed by the assets PVC',
@@ -2415,6 +2561,35 @@ assert_mutation_rejected(
 ) do |documents|
   redis_egress = resource(documents, 'NetworkPolicy', 'allow-redis-egress-test')
   redis_egress.dig('spec', 'podSelector', 'matchExpressions').first['values'] = %w[backend worker]
+end
+
+# Omniva reachability rides allow-https-egress rather than a rule of its own
+# — see the assertion above and networkpolicy.yaml — so dropping worker from
+# that selector (backend stays, to isolate this from the "backup" mutation
+# below) is exactly the edit that would leave Omniva silently unreachable
+# from the worker with every other check still green. This is the guard that
+# is supposed to notice, before the general selector-shape check further down
+# would notice the same edit for an unrelated reason.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'worker dropped from the HTTPS egress rule Omniva rides on',
+  'backend and worker must keep general HTTPS egress for Omniva to stay reachable'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'podSelector', 'matchExpressions').first['values'] =
+    %w[backend storefront predeploy catalogue-import backup]
+end
+
+# The selector stays intact but the rule itself stops admitting 443 — the
+# other way this rule could stop carrying Omniva traffic while every workload
+# census above it stays green.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the HTTPS egress rule narrowed off port 443',
+  'the HTTPS egress rule Omniva rides on must still admit port 443'
+) do |documents|
+  https = resource(documents, 'NetworkPolicy', 'allow-https-egress-test')
+  https.dig('spec', 'egress', 0, 'ports').first['port'] = 8443
 end
 
 # The exact state this repository shipped in before the `backup` component was
@@ -3150,7 +3325,7 @@ assert_mutation_rejected(
   end
 end
 
-# The three copied onto a backend-image workload, at the correct values. Every
+# The two copied onto a backend-image workload, at the correct values. Every
 # value assertion is satisfied; only the consumer census refuses it. Without
 # that census this is how a second home for the merchant disclosures appears,
 # and the next edit updates one of the two.
@@ -3163,6 +3338,62 @@ assert_mutation_rejected(
   MERCHANT_STOREFRONT_DISCLOSURES.each do |name, value|
     backend.fetch('env') << { 'name' => name, 'value' => value }
   end
+end
+
+# MERCHANT_PHONE_NUMBER copied onto a workload that reads none of the three
+# values in MERCHANT_PHONE_NUMBER_VALUES. Without the census this is a fourth
+# home for a name the two images already disagree about the meaning of.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'MERCHANT_PHONE_NUMBER copied onto the predeploy Job',
+  'MERCHANT_PHONE_NUMBER must reach exactly storefront, backend and worker, each once, at its own value'
+) do |documents|
+  predeploy = pod_spec(resource(documents, 'Job', 'plepic-predeploy-test')).fetch('containers').first
+  predeploy.fetch('env') << { 'name' => 'MERCHANT_PHONE_NUMBER', 'value' => '+372 5555 0100' }
+end
+
+# The Omniva sender profile copied onto catalogue-import, which runs the same
+# backend image but never creates a shipment. Without the census this is how
+# a stray copy — read by nothing — becomes the place a later edit updates
+# instead of backend.yaml/worker.yaml.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva sender profile copied onto catalogue-import',
+  'the Omniva sender profile must be projected only to backend and worker'
+) do |documents|
+  import_job = pod_spec(resource(documents, 'Job', 'plepic-catalogue-import-test')).fetch('containers').first
+  OMNIVA_SENDER_ENVIRONMENT.each do |name|
+    import_job.fetch('env') << { 'name' => name, 'value' => 'copied' }
+  end
+end
+
+# The Omniva credential reference copied onto predeploy — a Secret reference
+# nothing there reads, and a second place the key set could silently drift
+# from backend.yaml/worker.yaml.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva credential copied onto the predeploy Job',
+  'the Omniva credential must be projected only to backend and worker, and every key optional'
+) do |documents|
+  predeploy = pod_spec(resource(documents, 'Job', 'plepic-predeploy-test')).fetch('containers').first
+  predeploy.fetch('env') << {
+    'name' => 'OMNIVA_API_USER',
+    'valueFrom' => { 'secretKeyRef' => { 'name' => 'plepic-omniva', 'key' => 'OMNIVA_API_USER', 'optional' => true } },
+  }
+end
+
+# The same credential, left on backend and worker alone but with `optional`
+# dropped from one key — the state that stops this namespace's pods from
+# starting at all until Omniva issues a key, which is the entire reason
+# `optional: true` is on every one of the three.
+assert_mutation_rejected(
+  ARGV.fetch(1), test_options,
+  'the Omniva credential required rather than optional on the backend',
+  'the Omniva credential must be projected only to backend and worker, and every key optional'
+) do |documents|
+  backend = pod_spec(resource(documents, 'Deployment', 'plepic-backend-test')).fetch('containers').first
+  entry = backend.fetch('env').find { |item| item['name'] == 'OMNIVA_API_USER' }
+  entry.dig('valueFrom', 'secretKeyRef').delete('optional')
 end
 
 # The identity drifting between the two images that resolve the same withdrawal
