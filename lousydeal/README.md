@@ -82,9 +82,161 @@ framework reads that variable from the process environment regardless of
 which script started it, so the two are equivalent -- and `backend.yaml`
 states `MEDUSA_WORKER_MODE=server` explicitly for the same reason.
 
-The worker carries no readiness or liveness probe. That is T13b, not this
-row -- see the plan's second T13 checkbox -- and `tests/manifests.sh` asserts
-the absence as a fact this row leaves for that one to change.
+## The worker's probes (T13b)
+
+**The worker binds :9000 and answers `/health`, in `worker` mode, unassisted
+by any code this repository writes.** This was not obvious going
+in: `worker.yaml` previously stated the worker "serves no HTTP request," and
+that sentence was never measured against the built image -- it read
+`@medusajs/medusa/dist/commands/start.js:245-248` (`app.get("/health", ...)`
+then `http_.listen(port, host)`) as a path both `server` and `worker` share,
+with `:284-331` only forking a cluster child differently under `--cluster`,
+which this Deployment does not pass. That reading turned out to be right, but
+only running the real image settles it.
+
+Measured 2026-08-31 against `localhost/lousydeal-backend:t11` (the only
+backend image on this host, predating this row), a real PostgreSQL
+17.10-bookworm (the version `base/postgresql.yaml:81` pins) and a
+real Redis 7 (`--requirepass` set, matching the shape a cluster Secret
+projects), all three on one `podman` network, `npx medusa db:migrate
+--execute-safe-links` run once first so the API and Tax/Payment module
+loaders had schema to read:
+
+```console
+$ podman run -d --name t13b-worker --network t13b-net \
+    -e MEDUSA_WORKER_MODE=worker \
+    -e DATABASE_URL=postgres://medusa:***@t13b-pg:5432/lousydeal \
+    -e JWT_SECRET=*** -e COOKIE_SECRET=*** \
+    -e REDIS_HOST=t13b-redis -e REDIS_PORT=6379 -e REDIS_PASSWORD=*** \
+    -e STRIPE_SECRET_KEY=sk_test_*** -e STRIPE_WEBHOOK_SECRET=whsec_*** \
+    localhost/lousydeal-backend:t11 npm run start
+$ podman logs --timestamps t13b-worker | grep "Server is ready"
+2026-08-31T18:21:14.575508000Z {"activity_id":"...","duration":1421,"level":"info",
+  "message":"Server is ready on port: 9000", ...}
+$ curl -s -o /dev/null -w '%{http_code}\n' http://<worker-ip>:9000/health
+200
+$ curl -s -o /dev/null -w '%{http_code}\n' http://<worker-ip>:9000/app
+404
+$ curl -s -o /dev/null -w '%{http_code}\n' http://<worker-ip>:9000/admin/users
+404
+$ curl -s -o /dev/null -w '%{http_code}\n' http://<worker-ip>:9000/store/products
+404
+```
+
+**The Admin gains no second surface through the worker.** `/health` is the
+only path that answers in `worker` mode; `/app` (the Admin bundle, live on
+this same port in `server` mode -- the `lousydeal` repository's
+`backend/Dockerfile`'s own comment on `EXPOSE 9000`) and every `/admin/*` and
+`/store/*` route tried answered `404`. This is not just four sampled paths:
+`@medusajs/medusa/dist/loaders/index.js:51-55` returns from `loadEntrypoints`
+before it ever reaches `:78` (the Admin loader) or `:79` (the API router),
+whenever `isWorkerMode` (`:24-26`) is true -- so in `worker` mode nothing but
+`start.js:245`'s `/health` is ever registered, for any path, not only the
+four tried above. `isWorkerMode` is exactly `configModule.projectConfig.workerMode
+=== "worker"` -- a string equality, not a presence check -- and the framework
+defaults an absent `workerMode` to `"shared"`, which is not worker mode. That
+is why `MEDUSA_WORKER_MODE: worker` is the one line in `worker.yaml` this
+exposure property rests on, and why `tests/manifests.sh` now asserts it is
+exactly `worker` on the worker and exactly `server` on `backend.yaml`
+(`README.md` above already claimed the latter; the assertion is what makes it
+provable rather than merely stated) -- deleting the worker's line, or setting
+it to `server`, was measured to leave every other T13b assertion green while
+`/app` answers `200`.
+
+Target Exposure's ban on a public Admin hostname was never at risk from this
+port not being reachable from outside the cluster (`service.yaml` carries no
+`externalIP` for the worker, and `allow-backend-ingress` does not select it
+either); this closes the other half -- there is no route *to* Admin through
+the worker even from inside the mesh, because the worker's own HTTP surface
+does not serve it.
+
+**Boot time, three runs, same image and `args`:** `Server is ready on port:
+9000` logged 2.81s, 2.84s and 2.86s after the container's `StartedAt`
+timestamp (`podman inspect` vs. `podman logs --timestamps`), each run against
+a cold `podman run` on this host with Redis and PostgreSQL already up.
+
+**What `/health` checks, measured directly: nothing but the process being
+alive.** `@medusajs/medusa/dist/commands/start.js:245` is
+`app.get("/health", (_, res) => res.status(200).send("OK"))` -- unconditional,
+and Medusa's own comment, one line above at `:244`, reads "Ideally this also
+checks the readiness of the service, rather than just returning a static
+response." To confirm rather than take the comment's word for it: with the worker above
+still running, `podman stop t13b-redis` was run, and `/health` kept answering
+`200` for the following minutes while the container's own logs filled with
+`Error: getaddrinfo ENOTFOUND t13b-redis` from the Redis clients underneath.
+
+**That is why both probes point at `/health` rather than nothing.**
+
+- **Readiness gates the Deployment's own rolling update, not traffic.** The
+  worker has no Service (T13a) and sits behind no ingress path -- but Argo CD
+  does read this condition: it assesses Deployment health from
+  `availableReplicas`/the `Available` condition, which is readiness-derived,
+  and T15 builds a gated sync on that health assessment. On `replicas: 1`
+  with the `strategy:` pinned above (`maxUnavailable: 0`, asserted by
+  `tests/manifests.sh`; an unpinned default only reaches the same value
+  because 25%/25% of one replica rounds down to zero), a new pod that never
+  turns Ready blocks `kubectl`/Argo CD from retiring the old one -- the
+  property this buys is that a broken image or a missing dependency cannot
+  silently replace a working worker.
+- **A liveness probe on `/health` restarts only the wedge case, not a
+  crash.** A crashed process needs no probe: the kubelet restarts any
+  container that exits on its own regardless of a liveness probe, and this is
+  measured, not assumed -- `SIGKILL` on the running `node` child took the
+  container down by itself, `Exited (137)`, with no probe involved. The
+  probe's only marginal value is the process that neither exits nor answers:
+  measured directly, `SIGSTOP` on the same child left the container `Up` and
+  silent, `/health` timing out rather than erroring. It cannot fire on a
+  Redis outage either way, because it is measured not to read Redis at all --
+  so it cannot turn one into the `CrashLoopBackOff` that `redis:preflight`
+  (T5) would otherwise cause by refusing every restart while Redis stays
+  down. This is the reasoned trade this row makes: a liveness probe wired to
+  something that *does* observe Redis (a custom `/ready` reading the
+  preflight's own check, for instance) would restart the worker exactly when
+  restarting cannot help, since the new container would refuse at the same
+  preflight the running one never re-runs. `/health`'s narrowness is what
+  keeps this probe honest about what it covers -- a wedged event loop, not
+  "the worker can reach its dependencies" or "the worker is alive" (the
+  kubelet already guarantees the latter) -- rather than a probe that appears
+  to check more than it does.
+- **Thresholds match `backend.yaml`'s** (`initialDelaySeconds: 10`/`30`,
+  `periodSeconds: 5`/`10`), chosen rather than copied: both Deployments run
+  the identical `npm run start` boot chain (`redis:preflight` then `medusa
+  start`), and the boot time measured above for the worker -- 2.81-2.86s --
+  clears a 10s readiness delay by 3.5x and a 30s liveness delay by ~10x, the
+  same margins `backend.yaml`'s own thresholds give its identical chain.
+
+**No NetworkPolicy admits the probe, confirmed against the render rather than
+assumed.** `kubectl kustomize` on both overlays renders ten `NetworkPolicy`
+resources (`tests/manifests.sh`'s own `expected_policy_names`), and grepping
+that render for a rule selecting `app.kubernetes.io/component: worker` on
+`Ingress` finds none -- `default-deny` declares `policyTypes: [Ingress,
+Egress]` and no rules at all (`base/networkpolicy.yaml:2-9`), and it is the
+only policy whose `Ingress` type reaches the worker pod, admitting nothing
+from any pod.
+
+That is not a gap this row needs to close, and the reason is documented and
+stronger than "`NetworkPolicy` has no field to restrict it with": Kubernetes
+states the guarantee directly -- *"traffic to and from the node where a pod
+is running is always allowed, regardless of the IP address of the pod or the
+node"* (kubernetes.io/docs/concepts/services-networking/network-policies) --
+so a `kubelet` probe, which originates from the node, reaches the pod
+regardless of what any `NetworkPolicy` in this namespace says. `ipBlock` is
+in fact how a `NetworkPolicy` reaches node-sourced traffic when a rule wants
+to select it -- `allow-storefront-ingress`, in this same base directory,
+admits `192.168.0.0/16` that way -- so the worker's `Ingress` is not
+unreachable for lack of a field; it is unreachable because it carries no
+rule at all, a stronger absence than "no field could express one."
+
+Nor is this untested against this project's own infrastructure. The
+reference application ships the identical `default-deny`
+(`plepic/base/networkpolicy.yaml:2-9`) alongside four `httpGet` probes across
+two workloads -- `backend.yaml:127` (readiness, with liveness reusing it via
+YAML anchor) and `storefront.yaml:166` (readiness) and `:171` (liveness) --
+running in the Orange cluster today, and `orange/docs/current/cluster.md:20-29`
+records that this K3s server's control plane includes a network policy
+controller, i.e. that `default-deny` is actually enforced there, not merely
+declared. Kubelet probes keep working against those workloads under that
+enforcement.
 
 ## SIGTERM: accepted, not fixed here
 

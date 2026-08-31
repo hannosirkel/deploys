@@ -257,19 +257,95 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   raise 'storefront env must be exactly the three names runtime-config.ts reads' unless
     storefront_names.sort == %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY].sort
 
-  # Probes: T13b, not this row, gives the worker a readiness/liveness probe --
-  # asserting its absence here is what keeps a future accidental copy from
-  # this file's own backend/storefront blocks from silently landing early.
+  # Probes.
   backend = resource(documents, 'Deployment', "lousydeal-backend#{suffix}")
   backend_container = pod_containers(pod_spec(backend)).first
   raise 'backend readiness probe must target /health' unless
     backend_container.dig('readinessProbe', 'httpGet', 'path') == '/health'
   raise 'backend liveness probe must target /health' unless
     backend_container.dig('livenessProbe', 'httpGet', 'path') == '/health'
+
+  # T13b: measured directly against `localhost/lousydeal-backend:t11` with
+  # `MEDUSA_WORKER_MODE=worker`, a real PostgreSQL and a real Redis (see
+  # `lousydeal/README.md`) -- the worker binds :9000 and answers `/health`
+  # `200`, every other path tried (`/app` included) answered `404`, and three
+  # boot runs reached "Server is ready on port: 9000" in 2.81-2.86s. This
+  # asserts the measured shape, not merely that a key named `*Probe` exists.
   worker = resource(documents, 'Deployment', "lousydeal-worker#{suffix}")
   worker_container = pod_containers(pod_spec(worker)).first
-  raise 'the worker must carry no probe before T13b' if
-    worker_container.key?('readinessProbe') || worker_container.key?('livenessProbe')
+  # The readiness comment's rolling-update guarantee holds only at
+  # `maxUnavailable: 0` -- pinned explicitly in `worker.yaml` rather than left
+  # to the apiserver's 25%/25% default, which happens to round to zero only at
+  # this replica count. `maxUnavailable: 1` at `replicas: 1` would let a new,
+  # never-Ready pod replace the working one -- exactly what that comment says
+  # cannot happen.
+  raise 'worker rolling update must keep maxUnavailable at 0' unless
+    worker.dig('spec', 'strategy', 'rollingUpdate', 'maxUnavailable') == 0
+  raise 'worker readiness probe must target /health on the http port' unless
+    worker_container.dig('readinessProbe', 'httpGet', 'path') == '/health' &&
+    worker_container.dig('readinessProbe', 'httpGet', 'port') == 'http'
+  raise 'worker readiness thresholds must match the measured boot time' unless
+    worker_container.dig('readinessProbe', 'initialDelaySeconds') == 10 &&
+    worker_container.dig('readinessProbe', 'periodSeconds') == 5
+  raise 'worker liveness probe must target /health on the http port' unless
+    worker_container.dig('livenessProbe', 'httpGet', 'path') == '/health' &&
+    worker_container.dig('livenessProbe', 'httpGet', 'port') == 'http'
+  raise 'worker liveness thresholds must match the measured boot time' unless
+    worker_container.dig('livenessProbe', 'initialDelaySeconds') == 30 &&
+    worker_container.dig('livenessProbe', 'periodSeconds') == 10
+  raise 'worker container must declare the port its probes target' unless
+    pod_containers(pod_spec(worker)).first.fetch('ports', []).any? { |port| port['name'] == 'http' && port['containerPort'] == 9000 }
+  # Judgement call (T13b review): not every probe mutation is worth asserting
+  # against -- a test cannot enumerate every misconfiguration, and
+  # `failureThreshold`/`timeoutSeconds` are legitimate operational knobs a
+  # later row may reasonably tune, with no single bound this contract could
+  # pin without becoming the next thing that drifts. `scheme` and `host` are
+  # different in kind: this container serves plain HTTP on its own pod IP,
+  # always, so neither field has a legitimate value other than absent here --
+  # `scheme: HTTPS` is a guaranteed failure against a plaintext server, and
+  # any `host:` sends the probe off the pod entirely. Both were measured to
+  # pass silently with no assertion in place, so both are asserted; threshold
+  # tuning is not.
+  %w[readinessProbe livenessProbe].each do |probe_name|
+    probe = worker_container.fetch(probe_name)
+    raise "worker #{probe_name} must not set host (it would leave the pod)" if
+      probe.dig('httpGet', 'host')
+    raise "worker #{probe_name} must not override scheme away from plain HTTP" if
+      probe.dig('httpGet', 'scheme') && probe.dig('httpGet', 'scheme') != 'HTTP'
+  end
+
+  # Exposure: `MEDUSA_WORKER_MODE` is the one line that keeps the Medusa
+  # Admin off the worker's HTTP surface -- setting it to `server`, or
+  # deleting it, both leave every probe/port/Service assertion above green
+  # while `/app` starts answering `200` (measured; see `lousydeal/README.md`).
+  # `loadEntrypoints` returns before mounting the admin loader only when
+  # `isWorkerMode` is true, and `isWorkerMode` is true only for the literal
+  # string `"worker"` (`@medusajs/medusa/dist/loaders/index.js:24-26,51-55`,
+  # returning at :53-55 before the admin loader at :78) -- every other value,
+  # including an absent variable, resolves to Medusa's own `"shared"` default,
+  # which is not worker mode. This is why the check below is a string equality
+  # on `worker`, not a presence check.
+  raise 'the worker must set MEDUSA_WORKER_MODE to worker, exactly' unless
+    env_entry(worker_container, 'MEDUSA_WORKER_MODE')&.fetch('value', nil) == 'worker'
+  # Symmetric case: `backend.yaml` already sets this, and `README.md` already
+  # claims it -- this is the assertion that makes the claim provable rather
+  # than merely stated.
+  raise 'the backend must set MEDUSA_WORKER_MODE to server, exactly' unless
+    env_entry(backend_container, 'MEDUSA_WORKER_MODE')&.fetch('value', nil) == 'server'
+
+  # The worker takes no traffic (T13a) -- a Service here would be a route this
+  # row's own probe comments say does not exist, not a probe requirement. Keyed
+  # on the selector, not the name: a Service named anything at all still
+  # routes to the worker's pods if its selector matches their labels
+  # (measured -- `lousydeal-worker-http` selecting `component: worker` on 9000
+  # passed a name-keyed version of this check).
+  worker_pod_labels = worker.dig('spec', 'template', 'metadata', 'labels') || {}
+  raise 'the worker must carry no Service whose selector matches its pod labels' if
+    documents.any? do |document|
+      next false unless document['kind'] == 'Service'
+      selector = document.dig('spec', 'selector') || {}
+      !selector.empty? && selector.all? { |key, value| worker_pod_labels[key] == value }
+    end
   raise 'storefront readiness probe must render the real page' unless
     storefront_container.dig('readinessProbe', 'httpGet', 'path') == '/'
   # A TCP check, not an HTTP path -- this repository ships no backend-free

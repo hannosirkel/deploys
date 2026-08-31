@@ -11,6 +11,15 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
 spec:
   replicas: 1
+  # Pinned rather than left to the apiserver default: the readiness comment
+  # below depends on `maxUnavailable: 0` at this replica count (a new pod
+  # must turn Ready before the old one retires), and an unset `strategy:`
+  # only produces that value because 25%/25% of one replica rounds down to
+  # zero -- true today, but a value this comment relies on rather than one
+  # this manifest states. `tests/manifests.sh` asserts this block.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels:
       app.kubernetes.io/name: lousydeal-worker
@@ -34,13 +43,24 @@ spec:
           # there is no `start:worker` script to name here. `MEDUSA_WORKER_MODE`
           # below is the only thing that distinguishes this pod from the API:
           # `worker` mode runs subscribers, scheduled jobs and workflow-engine
-          # steps and serves no HTTP request.
+          # steps, not the Store/Admin API.
           #
-          # No readiness or liveness probe -- deliberately out of this row's
-          # scope (T13b). Plepic's own worker declares none either ("healthy"
-          # there means "running"); this Deployment is the same shape until
-          # T13b adds them.
+          # It still binds :9000 and answers /health, though -- this file
+          # previously claimed it "serves no HTTP request", and that was never
+          # measured. T13b ran `localhost/lousydeal-backend:t11` with
+          # `MEDUSA_WORKER_MODE=worker` against a real PostgreSQL and Redis:
+          # `Server is ready on port: 9000` logged in every run, `/health`
+          # answered `200 OK`, and every other path tried -- `/app` and
+          # `/app/login` included -- answered `404`. `start.js:245-248`
+          # registers `/health` and calls `http_.listen(port, host)` on the one
+          # code path both modes share; `:284-331` only forks a cluster child
+          # differently, and this Deployment does not pass `--cluster`. See
+          # `lousydeal/README.md` for the full run.
           args: [npm, run, start]
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
           env:
             - {name: MEDUSA_WORKER_MODE, value: worker}
             - {name: DATABASE_HOST, value: lousydeal-postgresql}
@@ -63,6 +83,48 @@ spec:
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
             - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+          # Readiness gates this Deployment's own rolling update, not traffic:
+          # the worker has no Service (T13a) and sits behind no ingress path.
+          # Argo CD also reads this condition -- it assesses Deployment health
+          # from `availableReplicas`/the `Available` condition, which is
+          # readiness-derived, and T15's gated sync acts on that health. On
+          # `replicas: 1` with the `strategy:` pinned above
+          # (`maxUnavailable: 0`), a new pod that never turns Ready blocks
+          # `kubectl`/Argo CD from retiring the old one -- the one thing this
+          # buys is that a broken image or a missing dependency cannot
+          # silently replace a working worker.
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          # `/health` is `res.status(200).send("OK")`
+          # (`@medusajs/medusa/dist/commands/start.js:245`), unconditional --
+          # Medusa's own comment, one line above at `:244`: "Ideally this also
+          # checks the readiness of the service, rather than just returning a
+          # static response." Measured, not assumed: with this container's
+          # Redis stopped mid-run, `/health` kept answering `200` while the
+          # Redis client logged `ENOTFOUND` underneath -- it does not read
+          # Redis or PostgreSQL. A crashed process needs no probe: the kubelet
+          # restarts any container that exits on its own regardless (measured
+          # -- `SIGKILL` on the `node` child took the container down by itself,
+          # `Exited (137)`). This liveness probe's only marginal value is the
+          # *wedge* case -- a process that neither exits nor answers (measured
+          # -- `SIGSTOP` on the same child left the container `Up` and silent,
+          # `/health` timing out rather than erroring). It cannot fire on a
+          # Redis outage either way, because it is measured not to read Redis
+          # at all, so it cannot turn one into the `CrashLoopBackOff` that
+          # `redis:preflight` (T5) would otherwise cause by refusing every
+          # restart while Redis stays down. Same endpoint and thresholds as
+          # `backend.yaml`: both
+          # run the identical `npm run start` boot chain, and three measured
+          # runs of this image under `MEDUSA_WORKER_MODE=worker` reached
+          # "Server is ready on port: 9000" in 2.81-2.86s against a real
+          # PostgreSQL and Redis -- these thresholds clear that with the same
+          # margin the backend's do. See `lousydeal/README.md` for the run.
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
