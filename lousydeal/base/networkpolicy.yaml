@@ -1,0 +1,242 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-storefront-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: storefront}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 192.168.0.0/16}
+      ports:
+        - {port: 3000, protocol: TCP}
+---
+# Admits only the storefront's own same-origin proxy, not the reference's
+# 192.168.0.0/16 WireGuard block. Target Exposure forbids the Medusa Admin a
+# public hostname "in any encoding" -- `service.yaml` already removes the
+# externalIP that would give that block anywhere to reach, and this rule is
+# the second half: even a WireGuard-attached administrator has no ingress
+# path to this pod at all in this plan, not merely no DNS name for one.
+#
+# This `ingress:` carries exactly one rule, and index 0 *is* the storefront
+# `podSelector` above -- not a CIDR followed by the pod path, the reference's
+# shape (`plepic/base/networkpolicy.yaml:36-44`, two rules, `ipBlock` at index
+# 0). Orange's Application template patches `replace /spec/ingress/0/from` for
+# both `storefront` and `backend`
+# (`orange/roles/argocd/templates/plepic-application.yaml.j2:53-66`), which is
+# safe against the reference only because its index 0 is the CIDR that patch
+# means to replace. Rendered against this file's single rule instead, that
+# same patch would delete the storefront's only ingress path and substitute a
+# private CIDR -- handing that CIDR a route to `backend:9000`, exactly what
+# this rule exists to withhold. T15's Application template for this row must
+# NOT render `replace /spec/ingress/0/from` against `allow-backend-ingress`
+# here. Adding a second, placeholder `ipBlock` rule to make the reference's
+# patch shape safe is not the fix: it would itself be an ingress path this row
+# exists to withhold.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: backend}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: storefront}
+      ports:
+        - {port: 9000, protocol: TCP}
+---
+# `backup` and `recovery` are Orange-rendered, not resources of this root --
+# see the reference's own README for the same pair. Decision 003 commits Lousy
+# Deal to its own PostgreSQL backups ("Backups are Lousy Deal's own, and the
+# restore must be exercised before the live gate"), and the component-label
+# contract those Jobs and this policy share (`argocd_backup_jobs`,
+# `recovery_targets`) is a cross-application Orange convention, not specific
+# to the reference. Admitting the labels now costs nothing before Orange
+# renders anything under them, and avoids a second row having to reopen this
+# file once it does.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: postgresql}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backend}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: predeploy}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backup}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: recovery}}
+      ports:
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: redis}
+  policyTypes: [Ingress]
+  # `predeploy` is admitted for the same reason as the PostgreSQL policy: it
+  # runs the backend image, and `medusa exec`/`medusa db:migrate` load the
+  # same module container this Deployment does -- the Redis-backed event bus,
+  # workflow engine and locking provider all connect at module scope
+  # (`backend/src/config/redis.ts`). Measured directly: `npm run predeploy`
+  # against this image logs "Connection to Redis in module 'event-bus-redis'
+  # established" before either seed script runs. A Job without this rule does
+  # not fall back to an in-process bus -- it retries the connection forever,
+  # and for a Sync-hook Job that blocks every wave behind it.
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: backend}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+        - podSelector: {matchLabels: {app.kubernetes.io/component: predeploy}}
+      ports:
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, predeploy, backup, recovery]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: postgresql}
+      ports:
+        - {port: 5432, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, predeploy]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: redis}
+      ports:
+        - {port: 6379, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-storefront-backend-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: storefront}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: backend}
+      ports:
+        - {port: 9000, protocol: TCP}
+---
+# `backend` and `worker`, not the reference's larger set, and no
+# `allow-smtp-submission-egress` policy exists in this base at all.
+#
+# `backend` needs this: `storefront/src/lib/store-payment.ts` documents that
+# Stripe payment-session creation goes through the *stock* Medusa Store API
+# (`POST /store/payment-collections/:id/payment-sessions`), which invokes the
+# Stripe provider's `initiatePayment` -- an outbound call to Stripe's API --
+# inside whichever process handles that request. `worker` is admitted for the
+# same module set: both run the backend image with the same
+# `redisWorkflowEngineModule` wiring (`backend/src/config/redis.ts`), so a
+# payment-related workflow step marked to run out of band is the worker's to
+# execute, not the API pod's.
+#
+# `storefront` is not admitted. Its own Stripe integration
+# (`storefront/src/app/checkout/PaymentForm.tsx`) is a `"use client"` component
+# using `@stripe/stripe-js` and `@stripe/react-stripe-js` -- `loadStripe` and
+# `stripe.confirmPayment` run in the visitor's browser, not in this container,
+# and every store-API call the storefront's own server makes is same-origin
+# to `lousydeal-backend`, which `allow-storefront-backend-egress` above
+# already admits. Nothing in `storefront/src` opens an external connection.
+#
+# `predeploy` is not admitted either, and this is measured rather than
+# inferred from the reference: `npm run predeploy` was run to completion,
+# read-only root filesystem and UID 10001, with `STRIPE_SECRET_KEY` set to an
+# invalid placeholder and no route to the public Internet, and it exited 0 --
+# `configure-commerce.ts` and `seed-product.ts` carry no `stripe` reference at
+# all (`grep -n stripe backend/src/scripts/*.ts` matches nothing). Nor is
+# `catalogue-import`, which the reference has and this application does not
+# (`base/kustomization.yaml` carries no `import-job.yaml`).
+#
+# `backup` is admitted for the same reason as the reference's: Orange's
+# backup CronJobs upload their PostgreSQL archive to Backblaze B2 over 443,
+# and egress here is CIDR-only, so reaching B2 means being in this selector.
+# `recovery` stays out for the same least-privilege reason as the reference's
+# -- the restore path fetches and decrypts its object on the Ansible
+# controller, never from inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-https-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, backup]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {port: 443, protocol: TCP}

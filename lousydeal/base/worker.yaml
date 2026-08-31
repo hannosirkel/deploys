@@ -1,0 +1,74 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lousydeal-worker
+  labels: &labels
+    app.kubernetes.io/name: lousydeal-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: lousydeal
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lousydeal-worker
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: ghcr.io/hannosirkel/lousydeal-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          # Same image, same `args` as `backend.yaml` -- see that file for why
+          # there is no `start:worker` script to name here. `MEDUSA_WORKER_MODE`
+          # below is the only thing that distinguishes this pod from the API:
+          # `worker` mode runs subscribers, scheduled jobs and workflow-engine
+          # steps and serves no HTTP request.
+          #
+          # No readiness or liveness probe -- deliberately out of this row's
+          # scope (T13b). Plepic's own worker declares none either ("healthy"
+          # there means "running"); this Deployment is the same shape until
+          # T13b adds them.
+          args: [npm, run, start]
+          env:
+            - {name: MEDUSA_WORKER_MODE, value: worker}
+            - {name: DATABASE_HOST, value: lousydeal-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: lousydeal}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: DATABASE_PASSWORD}}
+            - {name: REDIS_HOST, value: lousydeal-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: REDIS_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: JWT_SECRET}}
+            - name: COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: COOKIE_SECRET}}
+            - name: STRIPE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_SECRET_KEY}}
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+            - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

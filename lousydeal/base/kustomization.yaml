@@ -1,0 +1,13 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - postgresql.yaml
+  - redis.yaml
+  - backend.yaml
+  - worker.yaml
+  - storefront.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - predeploy-job.yaml
+  - rbac.yaml

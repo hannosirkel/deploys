@@ -1,0 +1,94 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lousydeal-storefront
+  labels: &labels
+    app.kubernetes.io/name: lousydeal-storefront
+    app.kubernetes.io/component: storefront
+    app.kubernetes.io/part-of: lousydeal
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lousydeal-storefront
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: storefront
+          image: ghcr.io/hannosirkel/lousydeal-storefront:unpublished
+          imagePullPolicy: IfNotPresent
+          # No `args:`, deliberately. `storefront/Dockerfile` ships `CMD
+          # ["node", "server.js"]` with every package manager removed from the
+          # image and `ENTRYPOINT` cleared, and its own comment says the
+          # expectation directly: "a later row's manifests are expected to
+          # declare neither command: nor args: beyond that." Naming `args`
+          # here would only restate the image's own `CMD`.
+          ports:
+            - {name: http, containerPort: 3000, protocol: TCP}
+          env:
+            # `storefront/src/config/runtime-config.ts` reads exactly these
+            # three -- `MEDUSA_BACKEND_URL`, `MEDUSA_PUBLISHABLE_API_KEY`,
+            # `STRIPE_PUBLISHABLE_KEY` -- and nothing else: "no MERCHANT_*
+            # field -- no row in this slice renders an imprint", per that
+            # file's own header. There is no SITE_*, no redirect map, no
+            # external-link id and no CORS variable here: this backend image
+            # does not read `STORE_CORS`/`ADMIN_CORS`/`AUTH_CORS` either
+            # (`backend/src/config/runtime.ts` requires neither), so declaring
+            # them on any workload in this base would be configuration nothing
+            # reads.
+            - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend:9000"}
+            - name: MEDUSA_PUBLISHABLE_API_KEY
+              valueFrom: {secretKeyRef: {name: lousydeal-publishable-key, key: publishableKey}}
+            - name: STRIPE_PUBLISHABLE_KEY
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+          # Readiness renders the real page: `src/app/page.tsx` calls the
+          # store API through the same-origin proxy, so a pod that cannot
+          # reach a working backend is correctly pulled from the Service
+          # endpoints -- the same reasoning the reference applies to its own
+          # readiness probe.
+          #
+          # Liveness must not share that path, for the same reason the
+          # reference's does not: a backend hiccup would restart a Next.js
+          # process that was never unhealthy. The reference's liveness probe
+          # is `GET /robots.txt`, generated per request with no backend call --
+          # this repository has no such route (`ls storefront/src/app` carries
+          # no `robots.ts`, and none is in this row's Files list to add), so
+          # `GET /` is not available as a backend-free liveness check here.
+          # A TCP check on the same port the readiness probe already proves is
+          # serving keeps the invariant -- "liveness never depends on the
+          # backend" -- without inventing an HTTP route no code in this
+          # repository declares.
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: next-cache, mountPath: /app/.next/cache}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}

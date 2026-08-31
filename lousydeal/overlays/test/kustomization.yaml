@@ -1,0 +1,208 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lousydeal-test
+nameSuffix: -test
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/hannosirkel/lousydeal-backend
+    newName: ghcr.io/hannosirkel/lousydeal-backend
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/hannosirkel/lousydeal-storefront
+    newName: ghcr.io/hannosirkel/lousydeal-storefront
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  # 8131: this environment's slot in the same shared-WireGuard-address
+  # sequence `overlays/live/kustomization.yaml` explains. This is the one
+  # storefront hostname this slice ever routes to the public Internet
+  # (`test.lousydeal.com`, gated at T16 behind Cloudflare Access) --
+  # `lousydeal.com` itself "nobody in this slice", per Target Exposure.
+  - target:
+      kind: Service
+      name: lousydeal-storefront
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8131
+  - target:
+      kind: PersistentVolumeClaim
+      name: lousydeal-postgresql
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 3Gi
+  - target:
+      kind: PersistentVolumeClaim
+      name: lousydeal-redis
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 1Gi
+  - target:
+      kind: Deployment|StatefulSet|Job
+      labelSelector: app.kubernetes.io/part-of=lousydeal
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+  # `nameSuffix` above renames the Kubernetes objects this environment owns,
+  # but every value below is a plain string inside an env var -- kustomize has
+  # no reason to know `lousydeal-postgresql` inside a `DATABASE_HOST` value
+  # names a Service, so each reference to a renamed object, and each
+  # environment-scoped Secret name, is restated explicitly. Patched by
+  # strategic merge on `env`, keyed on `name`, matching every other entry in
+  # this file and the reference's own convention.
+  - target:
+      kind: StatefulSet
+      name: lousydeal-postgresql
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: lousydeal-postgresql
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgresql
+                env:
+                  - {name: POSTGRES_APPLICATION_DATABASE, value: lousydeal_test}
+                  - name: POSTGRES_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-database-admin, key: POSTGRES_SUPERUSER_PASSWORD}}
+                  - name: POSTGRES_APPLICATION_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: DATABASE_PASSWORD}}
+  - target:
+      kind: StatefulSet
+      name: lousydeal-redis
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: lousydeal-redis
+      spec:
+        template:
+          spec:
+            containers:
+              - name: redis
+                env:
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: REDIS_PASSWORD}}
+  - target:
+      kind: Deployment
+      name: lousydeal-backend
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lousydeal-backend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: backend
+                env:
+                  - {name: DATABASE_HOST, value: lousydeal-postgresql-test}
+                  - {name: DATABASE_NAME, value: lousydeal_test}
+                  - {name: REDIS_HOST, value: lousydeal-redis-test}
+                  - name: DATABASE_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: REDIS_PASSWORD}}
+                  - name: JWT_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: JWT_SECRET}}
+                  - name: COOKIE_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: COOKIE_SECRET}}
+                  - name: STRIPE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
+                  - name: STRIPE_WEBHOOK_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+                  - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+  - target:
+      kind: Deployment
+      name: lousydeal-worker
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lousydeal-worker
+      spec:
+        template:
+          spec:
+            containers:
+              - name: worker
+                env:
+                  - {name: DATABASE_HOST, value: lousydeal-postgresql-test}
+                  - {name: DATABASE_NAME, value: lousydeal_test}
+                  - {name: REDIS_HOST, value: lousydeal-redis-test}
+                  - name: DATABASE_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: REDIS_PASSWORD}}
+                  - name: JWT_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: JWT_SECRET}}
+                  - name: COOKIE_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: COOKIE_SECRET}}
+                  - name: STRIPE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
+                  - name: STRIPE_WEBHOOK_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+                  - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+  - target:
+      kind: Deployment
+      name: lousydeal-storefront
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lousydeal-storefront
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storefront
+                env:
+                  - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend-test:9000"}
+                  - name: MEDUSA_PUBLISHABLE_API_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-publishable-key, key: publishableKey}}
+                  - name: STRIPE_PUBLISHABLE_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+  - target:
+      kind: Job
+      name: lousydeal-predeploy
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: lousydeal-predeploy
+      spec:
+        template:
+          spec:
+            containers:
+              - name: predeploy
+                env:
+                  - {name: DATABASE_HOST, value: lousydeal-postgresql-test}
+                  - {name: DATABASE_NAME, value: lousydeal_test}
+                  - {name: REDIS_HOST, value: lousydeal-redis-test}
+                  - name: DATABASE_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: DATABASE_PASSWORD}}
+                  - name: REDIS_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: REDIS_PASSWORD}}
+                  - name: JWT_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: JWT_SECRET}}
+                  - name: COOKIE_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: COOKIE_SECRET}}
+                  - name: STRIPE_SECRET_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_SECRET_KEY}}
+                  - name: STRIPE_WEBHOOK_SECRET
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+                  - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
