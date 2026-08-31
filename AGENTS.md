@@ -51,19 +51,23 @@ removes the rest.
 
 Public deployable desired state, one top-level directory per application, which
 Argo CD reconciles into the Orange runtime. The repository root is not a
-deployable Kustomization. The application roots today are `plepic/` and
-`servitium/`.
+deployable Kustomization. The application roots today are `plepic/`,
+`servitium/` and `lousydeal/`. No Argo CD Application points at `lousydeal`
+yet, so its manifests are checked by CI and watched by nothing.
 
 ## Commands
 
 ```bash
 bash plepic/tests/manifests.sh
 bash servitium/tests/manifests.sh
+bash lousydeal/tests/manifests.sh
 
 kubectl kustomize plepic/overlays/live
 kubectl kustomize plepic/overlays/test
 kubectl kustomize servitium/overlays/live
 kubectl kustomize servitium/overlays/test
+kubectl kustomize lousydeal/overlays/live
+kubectl kustomize lousydeal/overlays/test
 ```
 
 The manifest tests assert the environment boundary, the non-root container

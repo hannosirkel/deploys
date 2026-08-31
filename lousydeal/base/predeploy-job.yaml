@@ -1,0 +1,127 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lousydeal-predeploy
+  labels: &labels
+    app.kubernetes.io/name: lousydeal-predeploy
+    app.kubernetes.io/component: predeploy
+    app.kubernetes.io/part-of: lousydeal
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      restartPolicy: Never
+      serviceAccountName: lousydeal-predeploy
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: predeploy
+          image: ghcr.io/hannosirkel/lousydeal-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          # `backend/package.json`'s `predeploy` script:
+          # `redis:preflight && medusa db:migrate --execute-safe-links &&
+          # configure:commerce && seed:product`. No `seed:administrator` --
+          # unlike the reference, this repository's predeploy chain never
+          # seeds an Admin user, so `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD`
+          # are absent from this container's `env:` below on purpose.
+          args: [npm, run, predeploy]
+          env:
+            - {name: DATABASE_HOST, value: lousydeal-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: lousydeal}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: DATABASE_PASSWORD}}
+            - {name: REDIS_HOST, value: lousydeal-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: REDIS_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: JWT_SECRET}}
+            - name: COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: COOKIE_SECRET}}
+            - name: STRIPE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_SECRET_KEY}}
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+            - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            # Ten empty directories, one `emptyDir` and ten `subPath`s --
+            # measured directly against `localhost/lousydeal-backend:t11`, the
+            # only backend image on this host. That image was built before
+            # both `714b61d` and `27586a1`, not at this row's HEAD -- see
+            # below for what that predates. Not copied from the reference's
+            # eleven. `medusa db:migrate`'s Migrator calls
+            # `ensureMigrationsDirExists()`
+            # (`@mikro-orm/migrations/Migrator.js:377`) for every module and
+            # provider it loads and does not tolerate a missing directory --
+            # it *creates* one -- which fails under `readOnlyRootFilesystem:
+            # true` regardless of the image's own `--chown` fix, because that
+            # fix only ever addressed UID 10001 owning `/node_modules`, not a
+            # read-only mount at runtime.
+            #
+            # Reproduced with `podman run --read-only --tmpfs /tmp --user
+            # 10001:10001` against a real PostgreSQL and Redis, iterating the
+            # `emptyDir` set until `medusa db:migrate` stopped raising ENOENT:
+            # the first pass names eight packages that ship no
+            # `dist/migrations` (`payment-stripe`, `auth-emailpass`,
+            # `fulfillment-manual`, `notification-local`, `cache-inmemory`,
+            # `event-bus-redis`, `locking`, `file`), and -- exactly as the
+            # reference's own comment predicts -- `locking` and `file` each
+            # hid a second directory the log names only after the first eight
+            # are mounted: `locking-redis` and `file-local`. Ten in total. With
+            # all ten mounted, `npm run predeploy` clears `db:migrate` and
+            # reaches `configure:commerce`, where it exits 1 on this image
+            # ("The store does not support usd; it cannot price anything this
+            # deployment sells") -- `27586a1`'s currency fix, which this build
+            # predates, not a mount defect. `omniva` and the reference's own
+            # `notifications` provider are
+            # absent from this list because this application registers
+            # neither: `backend/medusa-config.ts` wires only
+            # `redisEventBusModule`, `redisWorkflowEngineModule`,
+            # `redisLockingModule` and `stripePaymentModule`, so every other
+            # module here (`auth`, `fulfillment`, `notification`, `cache`,
+            # `file`) resolves to Medusa's own in-memory/local default
+            # provider rather than an application-owned one.
+            #
+            # Relaxing `readOnlyRootFilesystem` would make the same symptom
+            # disappear and is rejected for the same reason as the reference:
+            # this Job holds the database, Redis and Stripe secrets and is the
+            # worst container in the deployment to soften. Adding a module or
+            # provider whose package ships no migrations directory reproduces
+            # this failure and needs another entry here and in
+            # `tests/manifests.sh`.
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/payment-stripe/dist/migrations, subPath: payment-stripe, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/auth-emailpass/dist/migrations, subPath: auth-emailpass, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/fulfillment-manual/dist/migrations, subPath: fulfillment-manual, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/notification-local/dist/migrations, subPath: notification-local, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/cache-inmemory/dist/migrations, subPath: cache-inmemory, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/event-bus-redis/dist/migrations, subPath: event-bus-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking/dist/migrations, subPath: locking, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: module-migrations
+          emptyDir: {}

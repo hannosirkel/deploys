@@ -1,0 +1,149 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lousydeal-postgresql-init
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+data:
+  10-medusa-owner.sh: |
+    #!/bin/sh
+    set -eu
+
+    psql \
+      --set=ON_ERROR_STOP=1 \
+      --username "$POSTGRES_USER" \
+      --dbname postgres \
+      --set=app_user="$POSTGRES_APPLICATION_USER" \
+      --set=app_password="$POSTGRES_APPLICATION_PASSWORD" \
+      --set=app_database="$POSTGRES_APPLICATION_DATABASE" <<'EOSQL'
+    SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+      WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'app_user') \gexec
+    SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password') \gexec
+    SELECT format('CREATE DATABASE %I OWNER %I', :'app_database', :'app_user')
+      WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_database WHERE datname = :'app_database') \gexec
+    \connect :app_database
+    SELECT format('ALTER SCHEMA public OWNER TO %I', :'app_user') \gexec
+    SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'app_database', :'app_user') \gexec
+    SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT ALL ON TABLES TO %I', :'app_user', :'app_user') \gexec
+    SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT ALL ON SEQUENCES TO %I', :'app_user', :'app_user') \gexec
+    SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT ALL ON FUNCTIONS TO %I', :'app_user', :'app_user') \gexec
+    EOSQL
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lousydeal-postgresql
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Decision 003: an own StatefulSet per environment (`lousydeal-postgresql`,
+# `lousydeal-postgresql-test`), not a database inside a shared PostgreSQL.
+# There is no shared PostgreSQL service on the cluster to join, and Lousy Deal
+# takes payments -- coupling its availability to another application's
+# instance was rejected there.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: lousydeal-postgresql
+  labels: &postgresql-labels
+    app.kubernetes.io/name: lousydeal-postgresql
+    app.kubernetes.io/component: postgresql
+    app.kubernetes.io/part-of: lousydeal
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+spec:
+  replicas: 1
+  serviceName: lousydeal-postgresql
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lousydeal-postgresql
+  template:
+    metadata:
+      labels: *postgresql-labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgresql
+          image: postgres:17.10-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lousydeal-database-admin
+                  key: POSTGRES_SUPERUSER_PASSWORD
+            - name: POSTGRES_APPLICATION_USER
+              value: medusa
+            - name: POSTGRES_APPLICATION_DATABASE
+              value: lousydeal
+            - name: POSTGRES_APPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lousydeal-runtime-credentials
+                  key: DATABASE_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe: &postgresql-probe
+            exec:
+              command: [pg_isready, --username=postgres, --dbname=postgres]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            <<: *postgresql-probe
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lousydeal-postgresql
+        - name: init
+          configMap:
+            name: lousydeal-postgresql-init
+            defaultMode: 0550
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory

@@ -1,0 +1,103 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lousydeal-backend
+  labels: &labels
+    app.kubernetes.io/name: lousydeal-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: lousydeal
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lousydeal-backend
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # T11 measured both images at `USER 10001:10001` with `ENTRYPOINT`
+      # cleared (`backend/Dockerfile`, `scripts/images.test.ts`); this
+      # `securityContext` agrees with that measurement rather than repeating
+      # a value nothing checked it against.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: ghcr.io/hannosirkel/lousydeal-backend:unpublished
+          imagePullPolicy: IfNotPresent
+          # `ENTRYPOINT []` in `backend/Dockerfile` means `args` is the whole
+          # command Kubernetes runs -- there is nothing prefixed ahead of it.
+          # `MEDUSA_WORKER_MODE=server` below is what keeps this pod an API
+          # publisher rather than also running subscribers/scheduled jobs;
+          # `worker.yaml` runs the identical `args` with `worker` instead, since
+          # `backend/package.json` (scripts: build, start, redis:preflight,
+          # configure:commerce, seed:product, predeploy, typecheck, test:unit)
+          # declares no `start:worker` script for this shape to name -- unlike
+          # the reference, whose own script sets the env var inline. Medusa's
+          # framework reads `MEDUSA_WORKER_MODE` from the process environment
+          # regardless of which npm script started it, so the container `env:`
+          # entry is the equivalent of the reference's dedicated script.
+          args: [npm, run, start]
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          env:
+            - {name: MEDUSA_WORKER_MODE, value: server}
+            - {name: DATABASE_HOST, value: lousydeal-postgresql}
+            - {name: DATABASE_PORT, value: "5432"}
+            - {name: DATABASE_NAME, value: lousydeal}
+            - {name: DATABASE_USER, value: medusa}
+            - name: DATABASE_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: DATABASE_PASSWORD}}
+            - {name: REDIS_HOST, value: lousydeal-redis}
+            - {name: REDIS_PORT, value: "6379"}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: REDIS_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: JWT_SECRET}}
+            - name: COOKIE_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: COOKIE_SECRET}}
+            - name: STRIPE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_SECRET_KEY}}
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
+            # `backend/src/config/runtime.ts` reads this through `optionalEnv`,
+            # not `requireEnv`: it is a `pmc_...` id the operator creates by
+            # hand in the Stripe Dashboard, a step no row in this plan performs
+            # yet. `optional: true` on the `secretKeyRef` keeps this Deployment
+            # able to start before that Secret key exists, the same reasoning
+            # the reference applies to its Omniva credential.
+            - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
+              valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+          # `/health` is `@medusajs/framework`'s own route
+          # (`express-loader.js`: `isHealthCheck = (req) => req.path ===
+          # "/health"`), not application code -- confirmed installed at
+          # `2.18.0` in both this repository and the reference's.
+          readinessProbe: &probe
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            <<: *probe
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

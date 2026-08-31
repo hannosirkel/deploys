@@ -1,0 +1,65 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lousydeal
+resources:
+  - ../../base
+# Both images start on the all-zero SHA-256 sentinel, naming an image that was
+# never built -- it is not deployable in the only sense this repository can
+# guarantee, because a workload that reaches a cluster on it fails to pull
+# rather than running some wrong version. T12 (`lousydeal` repository) has yet
+# to add its `scripts/update-gitops-digest.sh` -- T12 runs after this row --
+# and it is to rewrite the two `digest:` lines below on merge to `main`;
+# nothing else in this repository is to edit them by hand. Each entry carries
+# exactly `name`, `newName` and `digest` -- no fourth key -- matching the
+# three-line block the `plepic` (not `deploys/plepic`) repository's
+# `scripts/update-gitops-digest.sh:221-235` already matches per image for the
+# reference, refusing the whole file if it cannot find exactly one.
+images:
+  - name: ghcr.io/hannosirkel/lousydeal-backend
+    newName: ghcr.io/hannosirkel/lousydeal-backend
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/hannosirkel/lousydeal-storefront
+    newName: ghcr.io/hannosirkel/lousydeal-storefront
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  # 8121: the next free slot after the reference's 8101/8102 (live) and
+  # 8111/8112 (test) and Servitium's 8098/8099 -- all on the one shared
+  # WireGuard address `192.168.21.2`, so every application/environment pair
+  # needs a cluster-wide-unique port on it. No backend port here: the backend
+  # Service carries no `externalIPs` at all (see `base/service.yaml`), so it
+  # has no WireGuard port to collide with anyone else's in the first place.
+  - target:
+      kind: Service
+      name: lousydeal-storefront
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8121
+  - target:
+      kind: PersistentVolumeClaim
+      name: lousydeal-postgresql
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 10Gi
+  - target:
+      kind: PersistentVolumeClaim
+      name: lousydeal-redis
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 1Gi
+  - target:
+      kind: Deployment|StatefulSet|Job
+      labelSelector: app.kubernetes.io/part-of=lousydeal
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
