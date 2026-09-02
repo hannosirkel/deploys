@@ -180,6 +180,17 @@ FORBIDDEN_ENV_NAMES = %w[
   SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
 ].freeze
 
+# `seed:administrator` runs only inside the predeploy Job's `npm run
+# predeploy` chain (`backend/package.json`) -- the API and worker
+# Deployments never execute it, and `runtime.ts`'s own header states these
+# two names are kept out of `BackendRuntimeConfig` specifically so neither
+# Deployment needs this credential to boot. So unlike
+# `BACKEND_IMAGE_REQUIRED_ENVIRONMENT`, which every backend-image workload
+# must declare, these two are required on the predeploy Job alone -- checked
+# below where that requirement is added -- and forbidden on every other
+# workload, backend-image or not, by a separate check further down.
+ADMINISTRATOR_ENV_NAMES = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD].freeze
+
 def assert_manifest(path, environment:, namespace:, suffix:)
   documents = YAML.load_stream(File.read(path)).compact
   overlay = YAML.load_file("lousydeal/overlays/#{environment}/kustomization.yaml")
@@ -213,6 +224,7 @@ def assert_manifest(path, environment:, namespace:, suffix:)
 
   service_account = resource(documents, 'ServiceAccount', "lousydeal-predeploy#{suffix}")
   raise 'predeploy service account must not mount a token' unless service_account['automountServiceAccountToken'] == false
+  predeploy = resource(documents, 'Job', "lousydeal-predeploy#{suffix}")
 
   # The census: three containers run the backend image (API, worker,
   # predeploy), one runs the storefront image -- no `catalogue-import`, this
@@ -236,19 +248,91 @@ def assert_manifest(path, environment:, namespace:, suffix:)
 
   # Required-environment contract: every workload running the backend image
   # declares the full set T11 measured, and none of the four workloads
-  # declares a name this application's code does not read.
+  # declares a name this application's code does not read. The predeploy Job
+  # is additionally required to carry `ADMINISTRATOR_ENV_NAMES` -- checked
+  # here because only backend-image workloads can ever carry it -- keyed on
+  # `workload.equal?(predeploy)`, the one `Job` resource already resolved
+  # above, not on a name string.
   workloads(documents).each do |workload|
+    is_predeploy = workload.equal?(predeploy)
     pod_containers(pod_spec(workload)).each do |container|
       next unless image_repository(container['image']) == BACKEND_IMAGE
       names = container.fetch('env', []).map { |e| e['name'] }
-      missing = BACKEND_IMAGE_REQUIRED_ENVIRONMENT - names
+      required = is_predeploy ? BACKEND_IMAGE_REQUIRED_ENVIRONMENT + ADMINISTRATOR_ENV_NAMES : BACKEND_IMAGE_REQUIRED_ENVIRONMENT
+      missing = required - names
       raise "#{workload.dig('metadata', 'name')}/#{container['name']} missing #{missing.join(', ')}" unless missing.empty?
+      # Each namespace's Application projects its own `*-database-admin`
+      # Secret (`orange/roles/argocd/defaults/main.yml` -- the ESO
+      # projections live in the argocd role, not the openbao role: the
+      # latter (`roles/openbao/defaults/main.yml`) holds only the flat list
+      # of registered source names, no namespace and no projection; T14a's
+      # own record, `docs/working/ld-01-foundation/journal.md:2270`, is "the
+      # argocd role waits for every ExternalSecret to report ready"). A
+      # literal `lousydeal-database-admin` reference does not exist as a
+      # Kubernetes Secret inside the `lousydeal-test` namespace, only
+      # `lousydeal-test-database-admin` does. `suffix` is this same
+      # overlay's own name-suffix convention (`assert_manifest`'s caller),
+      # so this catches the base's Secret name reaching the test overlay
+      # unremapped.
+      if is_predeploy
+        ADMINISTRATOR_ENV_NAMES.each do |admin_name|
+          ref = env_entry(container, admin_name)&.dig('valueFrom', 'secretKeyRef')
+          raise "#{admin_name} carries no secretKeyRef" unless ref
+          raise "#{admin_name} must be sourced from lousydeal#{suffix}-database-admin, not #{ref['name']}" unless
+            ref['name'] == "lousydeal#{suffix}-database-admin"
+          raise "#{admin_name} must read key #{admin_name}, not #{ref['key']}" unless ref['key'] == admin_name
+        end
+      end
       forbidden = names & FORBIDDEN_ENV_NAMES
       raise "#{workload.dig('metadata', 'name')}/#{container['name']} declares unread #{forbidden.join(', ')}" unless forbidden.empty?
       pmc = env_entry(container, 'STRIPE_PAYMENT_METHOD_CONFIGURATION_ID')
       raise 'STRIPE_PAYMENT_METHOD_CONFIGURATION_ID must be declared' unless pmc
       raise 'STRIPE_PAYMENT_METHOD_CONFIGURATION_ID must be optional' unless
         pmc.dig('valueFrom', 'secretKeyRef', 'optional') == true
+    end
+  end
+
+  # "and nowhere else": every container of every workload, not only the
+  # backend-image ones -- the storefront runs a different image entirely and
+  # still must not carry these two names -- and not only via `env:`:
+  # `envFrom.secretRef` projects every key of a Secret as environment
+  # variables, so a workload that `envFrom`s the administrator Secret reads
+  # both names without ever naming either one, past a check that only reads
+  # `env:`. Scoped per container, not per workload: within the predeploy
+  # Job's own pod, only the container actually named `predeploy` is exempt,
+  # so an unrelated `initContainer` added to that pod cannot smuggle the
+  # credential in under the workload's own exemption.
+  workloads(documents).each do |workload|
+    pod_containers(pod_spec(workload)).each do |container|
+      next if workload.equal?(predeploy) && container['name'] == 'predeploy'
+      leaked = container.fetch('env', []).map { |e| e['name'] } & ADMINISTRATOR_ENV_NAMES
+      raise "#{workload.dig('metadata', 'name')}/#{container['name']} must not read #{leaked.join(', ')}" unless leaked.empty?
+      env_from_secrets = container.fetch('envFrom', []).filter_map { |e| e.dig('secretRef', 'name') }
+      raise "#{workload.dig('metadata', 'name')}/#{container['name']} must not envFrom the administrator Secret (#{env_from_secrets.join(', ')})" if
+        env_from_secrets.any? { |name| name.end_with?('-database-admin') }
+    end
+  end
+
+  # Every Secret this repository's manifests reference is one of the
+  # environment-scoped `lousydeal{-test}-*` sources T14a registers into this
+  # overlay's own namespace -- never a literal `lousydeal-*` name reaching
+  # the `-test` namespace because some later variable's overlay patch forgot
+  # to remap it. The overlay patches are strategic merges keyed on `name`,
+  # so an entry the patch does not list silently keeps the base's live
+  # Secret name -- checked here once, generically, on every `secretKeyRef`
+  # and `envFrom.secretRef` in the render, rather than re-derived per
+  # variable the way `ADMINISTRATOR_ENV_NAMES` is above. Only a prefix
+  # check, deliberately: on the live overlay (`suffix` is `""`) every
+  # `lousydeal-test-*` name also starts with `lousydeal-`, so this catches
+  # the live-into-test direction the review measured, not its mirror.
+  workloads(documents).each do |workload|
+    pod_containers(pod_spec(workload)).each do |container|
+      referenced_secrets = container.fetch('env', []).filter_map { |e| e.dig('valueFrom', 'secretKeyRef', 'name') }
+      referenced_secrets += container.fetch('envFrom', []).filter_map { |e| e.dig('secretRef', 'name') }
+      referenced_secrets.each do |secret_name|
+        raise "#{workload.dig('metadata', 'name')}/#{container['name']} references #{secret_name}, not an environment-scoped lousydeal#{suffix}-* Secret" unless
+          secret_name.start_with?("lousydeal#{suffix}-")
+      end
     end
   end
   storefront = resource(documents, 'Deployment', "lousydeal-storefront#{suffix}")
@@ -389,7 +473,6 @@ def assert_manifest(path, environment:, namespace:, suffix:)
     payment-stripe auth-emailpass fulfillment-manual notification-local cache-inmemory
     event-bus-redis locking locking-redis file file-local
   ].map { |name| "/node_modules/@medusajs/#{name}/dist/migrations" }
-  predeploy = resource(documents, 'Job', "lousydeal-predeploy#{suffix}")
   expected_hook = {
     'argocd.argoproj.io/hook' => 'Sync',
     'argocd.argoproj.io/hook-delete-policy' => 'BeforeHookCreation,HookSucceeded',

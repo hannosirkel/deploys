@@ -12,6 +12,20 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
     argocd.argoproj.io/sync-wave: "-10"
 spec:
+  # Merge-order hazard, recorded rather than fixed here (T14d carries the
+  # ordering constraint): both `*-database-admin` Secret sources still
+  # project only `POSTGRES_SUPERUSER_PASSWORD`
+  # (`orange/roles/argocd/defaults/main.yml:942-943`) until T14d extends them
+  # with `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD`. Before this row, an
+  # absent credential failed fast: `seed:administrator`'s own `ConfigError`
+  # exited non-zero in seconds. Landing this row before T14d instead makes
+  # the two new `secretKeyRef`s (non-optional, below) point at keys that do
+  # not exist yet, which is a `CreateContainerConfigError` -- the container
+  # never starts, so it never exits, so this failure does not count against
+  # `backoffLimit: 2`. The hook stalls until `activeDeadlineSeconds` instead,
+  # failing as `DeadlineExceeded` after fifteen minutes rather than in
+  # seconds with a named error. Bounded, but strictly less legible than what
+  # it replaces.
   backoffLimit: 2
   activeDeadlineSeconds: 900
   template:
@@ -31,12 +45,15 @@ spec:
         - name: predeploy
           image: ghcr.io/hannosirkel/lousydeal-backend:unpublished
           imagePullPolicy: IfNotPresent
-          # `backend/package.json`'s `predeploy` script:
+          # `backend/package.json`'s `predeploy` script, as T14b merged it:
           # `redis:preflight && medusa db:migrate --execute-safe-links &&
-          # configure:commerce && seed:product`. No `seed:administrator` --
-          # unlike the reference, this repository's predeploy chain never
-          # seeds an Admin user, so `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD`
-          # are absent from this container's `env:` below on purpose.
+          # seed:administrator && configure:commerce && seed:product`.
+          # `seed:administrator` reads `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD`
+          # through `requireEnv` (`backend/src/admin/seed-administrator.ts`)
+          # and refuses the whole Job when either is absent -- kept out of
+          # `BackendRuntimeConfig` on purpose (`runtime.ts`'s own header) so
+          # the API and worker Deployments never need this credential to
+          # boot. This Job is their only consumer; see `env:` below.
           args: [npm, run, predeploy]
           env:
             - {name: DATABASE_HOST, value: lousydeal-postgresql}
@@ -49,6 +66,10 @@ spec:
             - {name: REDIS_PORT, value: "6379"}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: REDIS_PASSWORD}}
+            - name: MEDUSA_ADMIN_EMAIL
+              valueFrom: {secretKeyRef: {name: lousydeal-database-admin, key: MEDUSA_ADMIN_EMAIL}}
+            - name: MEDUSA_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: lousydeal-database-admin, key: MEDUSA_ADMIN_PASSWORD}}
             - name: JWT_SECRET
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: JWT_SECRET}}
             - name: COOKIE_SECRET

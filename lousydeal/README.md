@@ -73,8 +73,9 @@ sends mail, so no `allow-smtp-submission-egress` policy exists in this base.
 ## The worker runs the same `args` as the backend
 
 `backend/package.json` declares `build`, `start`, `redis:preflight`,
-`configure:commerce`, `seed:product`, `predeploy`, `typecheck` and
-`test:unit` -- no `start:worker`. The reference's own worker names a script
+`configure:commerce`, `seed:administrator`, `seed:product`, `predeploy`,
+`typecheck` and `test:unit` -- nine scripts, no `start:worker`. The
+reference's own worker names a script
 that sets `MEDUSA_WORKER_MODE=worker` inline; this repository has none to
 name, so `worker.yaml` runs the identical `[npm, run, start]` and sets
 `MEDUSA_WORKER_MODE=worker` as a container `env:` entry instead. Medusa's
@@ -326,7 +327,7 @@ application-first, `lousydeal-…` live and `lousydeal-test-…` test.
 
 | Secret | Keys | Consumed by |
 | --- | --- | --- |
-| `lousydeal{-test}-database-admin` | `POSTGRES_SUPERUSER_PASSWORD` | PostgreSQL StatefulSet |
+| `lousydeal{-test}-database-admin` | `POSTGRES_SUPERUSER_PASSWORD`, `MEDUSA_ADMIN_EMAIL`, `MEDUSA_ADMIN_PASSWORD` | PostgreSQL StatefulSet (first key), predeploy Job (other two) |
 | `lousydeal{-test}-runtime-credentials` | `DATABASE_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `COOKIE_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PUBLISHABLE_KEY` | backend, worker, predeploy, storefront |
 | `lousydeal{-test}-publishable-key` | `publishableKey` | storefront only |
 
@@ -350,8 +351,11 @@ kubectl kustomize lousydeal/overlays/test | kubeconform -strict -summary
 
 This manifest contract checks isolation, pod hardening, the exact
 NetworkPolicy set (including the no-externalIP/no-CIDR backend exposure
-boundary above), the required- and forbidden-environment-variable contracts,
-digest-pinned images and their census, the predeploy migration-mount contract,
-and the Sync-hook wave ordering. These manifests describe desired state only;
+boundary above), the required- and forbidden-environment-variable contracts
+(including that `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD` reach only the
+predeploy Job, sourced from the environment-scoped `*-database-admin`
+Secret and from no other Secret name, and never via `envFrom`), digest-pinned
+images and their census, the predeploy migration-mount contract, and the
+Sync-hook wave ordering. These manifests describe desired state only;
 their presence here does not claim that either environment has been deployed
 -- no Argo CD Application points at `lousydeal` yet.
