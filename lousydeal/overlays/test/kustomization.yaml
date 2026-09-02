@@ -196,6 +196,10 @@ patches:
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: DATABASE_PASSWORD}}
                   - name: REDIS_PASSWORD
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: REDIS_PASSWORD}}
+                  - name: MEDUSA_ADMIN_EMAIL
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-database-admin, key: MEDUSA_ADMIN_EMAIL}}
+                  - name: MEDUSA_ADMIN_PASSWORD
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-database-admin, key: MEDUSA_ADMIN_PASSWORD}}
                   - name: JWT_SECRET
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: JWT_SECRET}}
                   - name: COOKIE_SECRET
