@@ -130,6 +130,15 @@ def assert_pod_hardening(document)
     raise 'host ports are forbidden' if container.fetch('ports', []).any? { |port| port.key?('hostPort') }
     raise "resources missing on #{container['name']}" unless
       container['resources']&.key?('requests') && container['resources']&.key?('limits')
+    # T19: sized from measurement, not from a guess. T13 requested 200m (live)
+    # and 100m (test) per workload; measured against the running deployment
+    # every pod used 1-19m, so ten pods reserved 1700m for 77m of work and the
+    # node reached 99% of its twelve allocatable CPUs -- at which point live's
+    # predeploy Job could not schedule and live could not adopt a new digest.
+    # 50m is a little over twice the highest figure observed. Pinned because a
+    # request that drifts back up is invisible until a Job stops scheduling.
+    raise "cpu request on #{container['name']} must be 50m, sized by measurement" unless
+      container.dig('resources', 'requests', 'cpu') == '50m'
   end
 end
 
