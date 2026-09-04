@@ -21,17 +21,22 @@ spec:
   ports:
     - {name: redis, port: 6379, targetPort: redis, protocol: TCP}
 ---
-# No `externalIPs` here, unlike the reference's backend Service. Target
-# Exposure in `docs/working/ld-01-foundation.md` states the Medusa Admin
-# carries "no public hostname, in any encoding, never in LD-01" -- the
-# reference's own backend Service carries the shared WireGuard address
-# specifically so an operator can reach its Admin (`deploys/plepic/README.md`:
-# "exposes ... the backend on WireGuard port 8102"), which is exactly the
-# encoding this plan forbids. A ClusterIP with no external route is what makes
-# that true rather than merely stated: nothing outside the cluster's pod
-# network has any path to this Service at all, and `allow-backend-ingress`
-# below admits only the storefront's own proxy, not a private/administrative
-# CIDR the way the reference's does.
+# Decision 010 reverses this Service's original no-`externalIPs` posture:
+# the Admin is now reachable, gated behind Cloudflare Access rather than
+# withheld at the network layer entirely
+# (`https://github.com/hannosirkel/lousydeal/blob/main/docs/decisions/010-the-admin-is-reachable-and-gated.md`).
+# `externalIPs` carries the one shared WireGuard address, the same encoding
+# the reference's own backend Service uses so an operator can reach its Admin
+# (`deploys/plepic/README.md`: "exposes ... the backend on WireGuard port
+# 8102"). The Service's own `port` stays the container's default (9000, see
+# `base/backend.yaml`) -- each overlay patches it to this application's own
+# slot on that address (`overlays/{live,test}/kustomization.yaml`), the same
+# way `lousydeal-storefront` below is patched, so the raw container port never
+# reaches the shared address: every application/environment pair on it must
+# stay unique, and 9000 is not a value any row here has registered.
+# `allow-backend-ingress` carries the network half of the same reversal: a
+# rule admitting the base CIDR this decision accepts, added after the
+# storefront's own rule rather than in place of it.
 apiVersion: v1
 kind: Service
 metadata:
@@ -39,6 +44,7 @@ metadata:
   annotations: {argocd.argoproj.io/sync-wave: "0"}
 spec:
   type: ClusterIP
+  externalIPs: [192.168.21.2]
   selector: {app.kubernetes.io/name: lousydeal-backend}
   ports:
     - {name: http, port: 9000, targetPort: http, protocol: TCP}

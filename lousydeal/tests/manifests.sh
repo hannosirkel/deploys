@@ -145,6 +145,18 @@ end
 BACKEND_IMAGE = 'ghcr.io/hannosirkel/lousydeal-backend'.freeze
 STOREFRONT_IMAGE = 'ghcr.io/hannosirkel/lousydeal-storefront'.freeze
 
+# `/32`, not the reference's base `/16`: the reference's `/16` is a
+# placeholder each environment's own Orange patch replaces
+# (`plepic/base/networkpolicy.yaml:37`), and this policy carries no such
+# override, so this base value is what runs on merge. A `/16` base was
+# measured to reach `backend:9000` over the WireGuard tunnel directly, never
+# through Cloudflare Access -- `192.168.1.0/24` is inside
+# `wireguard_peer_allowed_ips`, `wg0` is a trusted interface, and the forward
+# chain's policy is `accept`
+# (`orange/roles/nftables/templates/nftables.conf.j2:57`). `/32` is the one
+# address the Cloudflare Tunnel connector itself reaches this cluster from.
+ADMIN_INGRESS_CIDR = '192.168.21.2/32'.freeze
+
 def image_repository(reference)
   repository = reference.to_s.split('@', 2).first.to_s
   return repository unless repository.split('/').last.to_s.include?(':')
@@ -447,21 +459,65 @@ def assert_manifest(path, environment:, namespace:, suffix:)
     storefront_container.key?('livenessProbe') && storefront_container['livenessProbe'].key?('tcpSocket') &&
     !storefront_container['livenessProbe'].key?('httpGet')
 
-  # Exposure: the one property this row's brief names as make-or-break. The
-  # Medusa Admin the backend image serves on 9000 must carry no route in from
-  # outside the cluster -- not a hostname, and not the reference's WireGuard
-  # CIDR either.
+  all_policies = documents.select { |document| document['kind'] == 'NetworkPolicy' }
+
+  # Exposure: decision 010 gives the Admin a route in, but the checkbox this
+  # row implements is narrower than "a route exists" -- the storefront's own
+  # rule must survive at index 0 unmoved, and nothing but the backend pod may
+  # gain one. Both properties are asserted against the rendered shape, not
+  # merely restated from this row's own diff, so a patch or a future edit
+  # that moves the rule, widens its CIDR, retargets its selector or drops its
+  # port constraint is caught here.
   backend_service = resource(documents, 'Service', "lousydeal-backend#{suffix}")
-  raise 'the backend Service must not carry an externalIP' if backend_service.dig('spec', 'externalIPs')
+  raise 'the backend Service must carry the WireGuard externalIP' unless
+    backend_service.dig('spec', 'externalIPs') == ['192.168.21.2']
   storefront_service = resource(documents, 'Service', "lousydeal-storefront#{suffix}")
   raise 'the storefront Service must carry the WireGuard externalIP' unless
     storefront_service.dig('spec', 'externalIPs') == ['192.168.21.2']
+
+  # The half this row actually changed and the review found unasserted: the
+  # backend Service's own port and the storefront's `MEDUSA_BACKEND_URL` must
+  # agree, derived from the render rather than compared against a constant --
+  # a drift here ships a storefront that cannot reach its own backend, or
+  # (paired with the cross-overlay check below) two Services claiming the
+  # same `192.168.21.2:port`.
+  raise 'the backend Service must expose exactly one port' unless backend_service.dig('spec', 'ports')&.length == 1
+  backend_port = backend_service.dig('spec', 'ports', 0, 'port')
+  raise "the backend Service's targetPort must still name the container's http port" unless
+    backend_service.dig('spec', 'ports', 0, 'targetPort') == 'http'
+  medusa_backend_url = env_entry(storefront_container, 'MEDUSA_BACKEND_URL')&.fetch('value', nil)
+  raise 'MEDUSA_BACKEND_URL must be declared' unless medusa_backend_url
+  medusa_backend_url_port = medusa_backend_url[/:(\d+)\z/, 1]&.to_i
+  raise "MEDUSA_BACKEND_URL (#{medusa_backend_url}) must name the backend Service's own port (#{backend_port})" unless
+    medusa_backend_url_port == backend_port
+
   backend_ingress = resource(documents, 'NetworkPolicy', "allow-backend-ingress#{suffix}")
-  raise 'backend ingress must admit only the storefront pod selector' unless backend_ingress.dig('spec', 'ingress') == [{
+  raise 'allow-backend-ingress must still select only the backend pod' unless
+    backend_ingress.dig('spec', 'podSelector') == { 'matchLabels' => { 'app.kubernetes.io/component' => 'backend' } }
+  raise 'backend ingress must carry exactly two rules' unless backend_ingress.dig('spec', 'ingress')&.length == 2
+  raise 'the storefront ingress rule must remain at index 0' unless backend_ingress.dig('spec', 'ingress', 0) == {
     'from' => [{ 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'storefront' } } }],
     'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
-  }]
-  all_policies = documents.select { |document| document['kind'] == 'NetworkPolicy' }
+  }
+  raise 'the admin ingress rule must be the second entry, admitting only the base CIDR on the backend port' unless
+    backend_ingress.dig('spec', 'ingress', 1) == {
+      'from' => [{ 'ipBlock' => { 'cidr' => ADMIN_INGRESS_CIDR } }],
+      'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
+    }
+  # "and no other workload gains a route": this row's only edit is
+  # `allow-backend-ingress`'s own `ingress` list, so the CIDR it admits must
+  # not appear as a peer in any other policy -- including one retargeted at
+  # the worker or at PostgreSQL by moving the rule rather than editing it in
+  # place. Excluded by name, not by selector: `allow-storefront-ingress` and
+  # `allow-storefront-backend-egress` share the storefront's `component`
+  # selector, so a selector-based exclusion would silently exempt both
+  # instead of the one policy (`allow-backend-ingress`) this row actually
+  # touches -- reviewed and measured to matter: `allow-storefront-backend-egress`
+  # carrying this CIDR as an egress peer previously passed this check.
+  leaked = all_policies.reject { |policy| policy.dig('metadata', 'name') == "allow-backend-ingress#{suffix}" }
+                        .select { |policy| policy.to_s.include?(ADMIN_INGRESS_CIDR) }
+  raise "admin CIDR leaked into #{leaked.map { |p| p.dig('metadata', 'name') }.join(', ')}" unless leaked.empty?
+
   broad_rules = all_policies.select { |policy| policy.to_s.include?('0.0.0.0/0') }
   raise 'only named HTTPS egress may be broad' unless broad_rules.map { |p| p.dig('metadata', 'name') } == ["allow-https-egress#{suffix}"]
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
@@ -511,13 +567,24 @@ test_environment = YAML.load_stream(File.read(ARGV[1])).compact
 assert_manifest(ARGV[0], environment: 'live', namespace: 'lousydeal', suffix: '')
 assert_manifest(ARGV[1], environment: 'test', namespace: 'lousydeal-test', suffix: '-test')
 
-# Cross-overlay: live and test must not collide on the one shared WireGuard
-# address, and neither backend Service anywhere carries one at all.
+# Cross-overlay: every Service on the one shared WireGuard address --
+# storefront and backend, live and test -- must claim a mutually distinct
+# port on it. This row doubled the port count on that address; the
+# per-overlay checks above cannot see the other overlay's render, so a
+# collision (backend live reusing storefront live's port, or either
+# environment's backend reusing the other's) only shows up here.
 live_storefront = live.find { |d| d['kind'] == 'Service' && d.dig('metadata', 'name') == 'lousydeal-storefront' }
 test_storefront = test_environment.find { |d| d['kind'] == 'Service' && d.dig('metadata', 'name') == 'lousydeal-storefront-test' }
-live_port = live_storefront.dig('spec', 'ports', 0, 'port')
-test_port = test_storefront.dig('spec', 'ports', 0, 'port')
-raise 'live and test storefront WireGuard ports must differ' if live_port == test_port
+live_backend = live.find { |d| d['kind'] == 'Service' && d.dig('metadata', 'name') == 'lousydeal-backend' }
+test_backend = test_environment.find { |d| d['kind'] == 'Service' && d.dig('metadata', 'name') == 'lousydeal-backend-test' }
+wireguard_ports = {
+  'live storefront' => live_storefront.dig('spec', 'ports', 0, 'port'),
+  'live backend' => live_backend.dig('spec', 'ports', 0, 'port'),
+  'test storefront' => test_storefront.dig('spec', 'ports', 0, 'port'),
+  'test backend' => test_backend.dig('spec', 'ports', 0, 'port'),
+}
+raise "192.168.21.2 ports must be mutually distinct: #{wireguard_ports}" unless
+  wireguard_ports.values.uniq.length == wireguard_ports.length
 
 puts 'lousydeal/tests/manifests.sh: all assertions passed'
 RUBY

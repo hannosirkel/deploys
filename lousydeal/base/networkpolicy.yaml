@@ -23,28 +23,41 @@ spec:
       ports:
         - {port: 3000, protocol: TCP}
 ---
-# Admits only the storefront's own same-origin proxy, not the reference's
-# 192.168.0.0/16 WireGuard block. Target Exposure forbids the Medusa Admin a
-# public hostname "in any encoding" -- `service.yaml` already removes the
-# externalIP that would give that block anywhere to reach, and this rule is
-# the second half: even a WireGuard-attached administrator has no ingress
-# path to this pod at all in this plan, not merely no DNS name for one.
+# Decision 010 reverses "even a WireGuard-attached administrator has no
+# ingress path to this pod at all in this plan": the Admin is now reachable,
+# gated behind Cloudflare Access rather than withheld at the network layer
+# too
+# (`https://github.com/hannosirkel/lousydeal/blob/main/docs/decisions/010-the-admin-is-reachable-and-gated.md`).
+# The second rule below admits that path, on this pod's own port.
 #
-# This `ingress:` carries exactly one rule, and index 0 *is* the storefront
-# `podSelector` above -- not a CIDR followed by the pod path, the reference's
-# shape (`plepic/base/networkpolicy.yaml:36-44`, two rules, `ipBlock` at index
-# 0). Orange's Application template patches `replace /spec/ingress/0/from` for
-# both `storefront` and `backend`
+# `192.168.21.2/32`, not the reference's base `192.168.0.0/16`
+# (`plepic/base/networkpolicy.yaml:37`): the reference's `/16` is a
+# placeholder each environment's own Orange patch replaces with a narrow
+# `ingress_source_ranges` list, and this application carries no such override
+# for this policy, so the base value here is what runs on merge. A `/16` base
+# would admit the whole WireGuard mesh, a path measured (against the
+# operator's own inventory) to reach `backend:9000` over the tunnel directly
+# -- `192.168.1.0/24` is inside `wireguard_peer_allowed_ips`, `wg0` is a
+# trusted interface, and the forward chain's policy is `accept`
+# (`orange/roles/nftables/templates/nftables.conf.j2:57`) -- never through
+# Cloudflare Access, which is the one property decision 010 requires. `/32`
+# is the single address the Cloudflare Tunnel connector actually reaches this
+# cluster from.
+#
+# This `ingress:` now carries two rules, and index 0 is still the storefront
+# `podSelector` above -- not the reference's shape
+# (`plepic/base/networkpolicy.yaml:26-44`), where index 0 is the `ipBlock` and
+# the pod path is index 1. Orange's Application template patches `replace
+# /spec/ingress/0/from` for both `storefront` and `backend`
 # (`orange/roles/argocd/templates/plepic-application.yaml.j2:53-66`), which is
 # safe against the reference only because its index 0 is the CIDR that patch
-# means to replace. Rendered against this file's single rule instead, that
-# same patch would delete the storefront's only ingress path and substitute a
-# private CIDR -- handing that CIDR a route to `backend:9000`, exactly what
-# this rule exists to withhold. T15's Application template for this row must
-# NOT render `replace /spec/ingress/0/from` against `allow-backend-ingress`
-# here. Adding a second, placeholder `ipBlock` rule to make the reference's
-# patch shape safe is not the fix: it would itself be an ingress path this row
-# exists to withhold.
+# means to replace. Rendered against this file unchanged, that same patch
+# would still delete the storefront's only ingress path and substitute a
+# private CIDR at index 0. Orange's Application for this root is already
+# wired (`orange` `main` `fc08f33`,
+# `roles/argocd/templates/lousydeal-application.yaml.j2`) and does not render
+# this patch against `allow-backend-ingress`; it must continue not to,
+# regardless of what it does at index 1.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -58,6 +71,10 @@ spec:
     - from:
         - podSelector:
             matchLabels: {app.kubernetes.io/component: storefront}
+      ports:
+        - {port: 9000, protocol: TCP}
+    - from:
+        - ipBlock: {cidr: 192.168.21.2/32}
       ports:
         - {port: 9000, protocol: TCP}
 ---

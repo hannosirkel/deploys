@@ -26,9 +26,7 @@ patches:
   # 8121: the next free slot after the reference's 8101/8102 (live) and
   # 8111/8112 (test) and Servitium's 8098/8099 -- all on the one shared
   # WireGuard address `192.168.21.2`, so every application/environment pair
-  # needs a cluster-wide-unique port on it. No backend port here: the backend
-  # Service carries no `externalIPs` at all (see `base/service.yaml`), so it
-  # has no WireGuard port to collide with anyone else's in the first place.
+  # needs a cluster-wide-unique port on it.
   - target:
       kind: Service
       name: lousydeal-storefront
@@ -36,6 +34,39 @@ patches:
       - op: replace
         path: /spec/ports/0/port
         value: 8121
+  # 8122: decision 010's backend slot, the next free port after 8121 in this
+  # sequence (resolved against `orange/roles/argocd/defaults/main.yml`'s
+  # `argocd_lousydeal_reserved_ports` -- Plepic's own reserved-ports table
+  # plus every `storefront_port`/`backend_port` Plepic itself registers --
+  # neither 8122 nor 8132 below appears in that set). `base/service.yaml` now
+  # carries `externalIPs` for the backend, so its container-default port
+  # (9000) must not reach the shared address unremapped, the same reason the
+  # storefront's own port is patched here rather than left at 3000.
+  - target:
+      kind: Service
+      name: lousydeal-backend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8122
+  # The Service port above changes what the ClusterIP itself answers on --
+  # kube-proxy only rewrites the port the Service declares, so the storefront
+  # must be told the same value or its own store-API calls stop resolving.
+  - target:
+      kind: Deployment
+      name: lousydeal-storefront
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lousydeal-storefront
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storefront
+                env:
+                  - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend:8122"}
   - target:
       kind: PersistentVolumeClaim
       name: lousydeal-postgresql

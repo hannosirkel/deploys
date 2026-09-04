@@ -52,8 +52,10 @@ removes the rest.
 Public deployable desired state, one top-level directory per application, which
 Argo CD reconciles into the Orange runtime. The repository root is not a
 deployable Kustomization. The application roots today are `plepic/`,
-`servitium/` and `lousydeal/`. No Argo CD Application points at `lousydeal`
-yet, so its manifests are checked by CI and watched by nothing.
+`servitium/` and `lousydeal/`. An Argo CD Application reconciles `lousydeal`
+as of `orange` `main` `fc08f33` (`roles/argocd/templates/lousydeal-application.yaml.j2`)
+-- corrected here as a maintenance fix, not by the row that added it: this
+sentence was already false before this branch touched the file.
 
 ## Commands
 
