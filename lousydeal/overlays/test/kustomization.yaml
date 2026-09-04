@@ -25,6 +25,16 @@ patches:
       - op: replace
         path: /spec/ports/0/port
         value: 8131
+  # 8132: this environment's slot in the same decision-010 backend sequence
+  # `overlays/live/kustomization.yaml` explains -- 8122 (live) plus one, and
+  # disjoint from the same reserved-ports resolution that check runs against.
+  - target:
+      kind: Service
+      name: lousydeal-backend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8132
   - target:
       kind: PersistentVolumeClaim
       name: lousydeal-postgresql
@@ -170,7 +180,7 @@ patches:
             containers:
               - name: storefront
                 env:
-                  - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend-test:9000"}
+                  - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend-test:8132"}
                   - name: MEDUSA_PUBLISHABLE_API_KEY
                     valueFrom: {secretKeyRef: {name: lousydeal-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY

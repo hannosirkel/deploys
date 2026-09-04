@@ -17,27 +17,42 @@ catalogue migration. The deployable roots are:
 - `overlays/test`, which renders isolated names, storage, database state and
   Secret references into namespace `lousydeal-test`.
 
-Only the storefront carries an `externalIP`, the shared WireGuard address
-`192.168.21.2`, on port 8121 (live) / 8131 (test) -- the next free slots after
+Both the storefront and the backend carry an `externalIP`, the shared
+WireGuard address `192.168.21.2` -- the storefront on port 8121 (live) / 8131
+(test), the backend on 8122 (live) / 8132 (test), the next free slots after
 Plepic's 8101/8102/8111/8112 and Servitium's 8098/8099 on that one shared
-address. **The backend Service carries none.** This is the one property that
-makes this root's shape differ from the reference's rather than merely copy
-it: Target Exposure in `docs/working/ld-01-foundation.md` states the Medusa
-Admin the backend image serves on port 9000 carries "no public hostname, in
-any encoding, never in LD-01," and the reference's own backend Service exists
-specifically to expose Admin to an operator over that same WireGuard address.
-A ClusterIP with no external route is what makes the forbidding true rather
-than stated, and `allow-backend-ingress` carries the same decision on the
-network side: it admits only the storefront's own pod selector on 9000, not
-the reference's `192.168.0.0/16` administrative CIDR. Reaching Admin at all
-is out of scope for every row in this plan. **`allow-backend-ingress` carries a
-single `ingress[].from` rule whose entry is that pod selector, not the
-reference's two rules with a CIDR at index 0** (`plepic/base/networkpolicy.yaml:36-44`)
--- so T15's Argo CD Application for this row must not render the reference
-template's `replace /spec/ingress/0/from` patch
+address. Decision [`010`](https://github.com/hannosirkel/lousydeal/blob/main/docs/decisions/010-the-admin-is-reachable-and-gated.md)
+reverses this root's original no-route shape: the Medusa Admin the backend
+image serves on port 9000 is now reachable, gated behind Cloudflare Access
+rather than withheld entirely. `allow-backend-ingress` carries the network
+half of the same reversal -- a second rule admitting `192.168.21.2/32`, the
+shared WireGuard address itself, **added after** the storefront's own
+pod-selector rule rather than in place of it.
+
+This is `/32`, not the reference's base `/16`
+(`plepic/base/networkpolicy.yaml:37`). The reference's `/16` is a placeholder
+each environment's own Orange patch replaces with a narrow
+`ingress_source_ranges` list; this application carries no such override for
+`allow-backend-ingress`, so the base value here is what runs on merge, not a
+value some later row is expected to narrow. A `/16` base would admit all
+65,536 addresses of `192.168.0.0/16`, and the operator's own inventory shows
+that path never reaches Cloudflare Access at all: `192.168.1.0/24` is inside
+`wireguard_peer_allowed_ips`, `wg0` is one of `nftables_trusted_interfaces`,
+and the forward chain's policy is `accept`
+(`orange/roles/nftables/templates/nftables.conf.j2:57`) -- so a host on that
+block reaches `backend:9000` over the tunnel directly, never through the
+proxy decision 010's *"reachable only through Cloudflare Access"* describes.
+`/32` is the one address that path actually needs.
+
+**That rule carries two entries now, and index 0 is still the storefront pod
+selector**, not the reference's shape, where index 0 is the CIDR
+(`plepic/base/networkpolicy.yaml:26-44`). Orange's Application for this root
+is already wired (`orange` `main` `fc08f33`,
+`roles/argocd/templates/lousydeal-application.yaml.j2`) and does not render
+the reference template's `replace /spec/ingress/0/from` patch
 (`orange/roles/argocd/templates/plepic-application.yaml.j2:53-66`) against
-`backend` here, or it would delete this rule and substitute a private CIDR
-onto port 9000.
+`backend` here; it must continue not to, regardless of what it does at index
+1, or it would delete this rule and substitute a private CIDR at index 0.
 
 ## CPU requests are measured, memory is not yet
 
@@ -162,12 +177,14 @@ provable rather than merely stated) -- deleting the worker's line, or setting
 it to `server`, was measured to leave every other T13b assertion green while
 `/app` answers `200`.
 
-Target Exposure's ban on a public Admin hostname was never at risk from this
-port not being reachable from outside the cluster (`service.yaml` carries no
-`externalIP` for the worker, and `allow-backend-ingress` does not select it
-either); this closes the other half -- there is no route *to* Admin through
-the worker even from inside the mesh, because the worker's own HTTP surface
-does not serve it.
+The worker gains no share of the reachability decision
+[`010`](https://github.com/hannosirkel/lousydeal/blob/main/docs/decisions/010-the-admin-is-reachable-and-gated.md)
+now grants the backend: `service.yaml` carries no `externalIP` for the worker, and
+`allow-backend-ingress` selects `component: backend`, not `component:
+worker`, so neither of that rule's two entries -- the storefront's or the
+CIDR's -- ever reaches this pod. This closes the other half of the same
+property: there is no route *to* Admin through the worker even from inside
+the mesh, because the worker's own HTTP surface does not serve it.
 
 **Boot time, three runs, same image and `args`:** `Server is ready on port:
 9000` logged 2.81s, 2.84s and 2.86s after the container's `StartedAt`
@@ -368,12 +385,17 @@ kubectl kustomize lousydeal/overlays/test | kubeconform -strict -summary
 ```
 
 This manifest contract checks isolation, pod hardening, the exact
-NetworkPolicy set (including the no-externalIP/no-CIDR backend exposure
-boundary above), the required- and forbidden-environment-variable contracts
+NetworkPolicy set (including the backend exposure shape above -- the
+storefront's rule fixed at index 0, the admin CIDR rule fixed at index 1, that
+no other workload's policy carries that CIDR by name, and that the backend
+Service's own port and the storefront's `MEDUSA_BACKEND_URL` agree), the
+required- and forbidden-environment-variable contracts
 (including that `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD` reach only the
 predeploy Job, sourced from the environment-scoped `*-database-admin`
 Secret and from no other Secret name, and never via `envFrom`), digest-pinned
 images and their census, the predeploy migration-mount contract, and the
-Sync-hook wave ordering. These manifests describe desired state only;
-their presence here does not claim that either environment has been deployed
--- no Argo CD Application points at `lousydeal` yet.
+Sync-hook wave ordering. These manifests describe desired state only; their
+presence here does not by itself claim that either environment has finished a
+sync. An Argo CD Application does reconcile `lousydeal` as of `orange` `main`
+`fc08f33` -- that wiring is what makes this claim about intent rather than
+about a running cluster, not the absence of an Application.
