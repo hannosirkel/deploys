@@ -18,10 +18,10 @@ resources:
 images:
   - name: ghcr.io/hannosirkel/lousydeal-backend
     newName: ghcr.io/hannosirkel/lousydeal-backend
-    digest: sha256:11db2dd728c884ed95a26ad593ba2a5e42b678c41e000b9b0b6733cd9d78bcba
+    digest: sha256:687374f3f882cb9e002e1b6b1c72618a33f3d75ce6118cc3478e1df80f49931e
   - name: ghcr.io/hannosirkel/lousydeal-storefront
     newName: ghcr.io/hannosirkel/lousydeal-storefront
-    digest: sha256:b6fc07a4c9938fed75ebf710478159923a08f13d7fe436c9625e95623f71a32d
+    digest: sha256:a11c5825b8033dbfe2cb2facd2d89925d5b6e1a5514885e6f9671d9fb98f7aa3
 patches:
   # 8121: the next free slot after the reference's 8101/8102 (live) and
   # 8111/8112 (test) and Servitium's 8098/8099 -- all on the one shared
