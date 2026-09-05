@@ -97,11 +97,37 @@ the same reasoning the reference applies to its own late-bootstrap credential.
 may want them required too" -- not this one). Declaring a name nothing reads
 is dead configuration copied by habit, not caution, so `tests/manifests.sh`
 refuses it as a positive assertion rather than leaving it unstated. The same
-is true of every `MERCHANT_*` and `SITE_*` name and the SMTP block: this
-storefront reads no `SITE_*` variable at all
-(`storefront/src/config/runtime-config.ts`'s own header: "no MERCHANT_* field
--- no row in this slice renders an imprint"), and nothing in this application
-sends mail, so no `allow-smtp-submission-egress` policy exists in this base.
+is true of every `SITE_*` name and the SMTP block: this storefront reads no
+`SITE_*` variable at all, and nothing in this application sends mail, so no
+`allow-smtp-submission-egress` policy exists in this base.
+
+**`MERCHANT_*` used to be on that list and is not any more.** The names that
+were there were the reference project's -- `MERCHANT_REGISTERED_ADDRESS`,
+`MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` -- and this storefront
+never read any of them, so the prohibition was inherited rather than measured.
+It reads five, and LD-09 gave it four legal documents that need them.
+
+**Three are committed and two are not, and the split is the contract's §2b.**
+The company, its address and its contact are public business-register facts
+that §2b says may be committed; they are also the same in both environments,
+because there is one company, so they sit in the base rather than in two
+overlays that would drift. A director's name, a registry code, a VAT number and
+a bank account are each "their own decision" and are not covered by it, so the
+two this storefront reads arrive the way §2b requires -- read server-side at
+runtime, never a literal in a repository -- through the sanctioned secrets
+path.
+
+Their `secretKeyRef` carries `optional: true`, for the reason
+`STRIPE_PAYMENT_METHOD_CONFIGURATION_ID` above carries it: a pod must start
+before the key exists. Until the operator supplies them, decision `004`'s
+resolver renders each as a named, visible gap and the document says it is
+incomplete. **That is the designed behaviour and not a defect** -- but it does
+mean the imprint is incomplete in both environments until those two keys are
+in OpenBao, which is an operator action outside every repository in this plan.
+
+`tests/manifests.sh` checks how each of the five arrives, not merely that it is
+declared: a registry code pasted in as a literal would satisfy a presence check
+and would be exactly the thing a public repository must never hold.
 
 ## The worker runs the same `args` as the backend
 
