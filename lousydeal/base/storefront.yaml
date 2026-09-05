@@ -38,21 +38,56 @@ spec:
           ports:
             - {name: http, containerPort: 3000, protocol: TCP}
           env:
-            # `storefront/src/config/runtime-config.ts` reads exactly these
-            # three -- `MEDUSA_BACKEND_URL`, `MEDUSA_PUBLISHABLE_API_KEY`,
-            # `STRIPE_PUBLISHABLE_KEY` -- and nothing else: "no MERCHANT_*
-            # field -- no row in this slice renders an imprint", per that
-            # file's own header. There is no SITE_*, no redirect map, no
-            # external-link id and no CORS variable here: this backend image
-            # does not read `STORE_CORS`/`ADMIN_CORS`/`AUTH_CORS` either
-            # (`backend/src/config/runtime.ts` requires neither), so declaring
-            # them on any workload in this base would be configuration nothing
-            # reads.
+            # The comment this replaces said the storefront reads exactly three
+            # variables and that there is "no MERCHANT_* field -- no row in
+            # this slice renders an imprint". LD-09 rendered four legal
+            # documents, so that is no longer true:
+            # `storefront/src/config/runtime-config.ts` now reads eight, the
+            # three below plus five `MERCHANT_*`.
+            #
+            # There is still no SITE_*, no redirect map, no external-link id
+            # and no CORS variable here: this backend image does not read
+            # `STORE_CORS`/`ADMIN_CORS`/`AUTH_CORS` (`backend/src/config/
+            # runtime.ts` requires neither), so declaring them on any workload
+            # in this base would be configuration nothing reads.
             - {name: MEDUSA_BACKEND_URL, value: "http://lousydeal-backend:9000"}
             - name: MEDUSA_PUBLISHABLE_API_KEY
               valueFrom: {secretKeyRef: {name: lousydeal-publishable-key, key: publishableKey}}
             - name: STRIPE_PUBLISHABLE_KEY
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+            # The trader details a customer must be able to find. The contract's
+            # §2b records these three and says committing them "is a deliberate
+            # §2a decision rather than an oversight": they are public
+            # business-register facts and a role address, not a person's contact
+            # details. They are also the same in both environments, because
+            # there is one company -- so they belong here and not in an overlay,
+            # where two copies of one fact would drift.
+            #
+            # **The decision stops at three.** §2b: "Do not extend that
+            # decision. A director's name, a registry code, a VAT number, and a
+            # bank account are each their own decision." The two below are
+            # therefore not values.
+            - {name: MERCHANT_LEGAL_NAME, value: "Aislopica OÜ"}
+            - {name: MERCHANT_ADDRESS, value: "Pihlaka tn 2, Jüri alevik, Rae vald, Harju maakond, 75301, Estonia"}
+            - {name: MERCHANT_EMAIL, value: "baldrick@lousydeal.com"}
+            # Registry code and VAT number reach a page the way §2b requires --
+            # read server-side at runtime, never a literal in a repository --
+            # and this repository is public, so the sanctioned secrets path is
+            # the only way they can arrive at all.
+            #
+            # `optional: true` for the same reason `STRIPE_PAYMENT_METHOD_
+            # CONFIGURATION_ID` above carries it: a pod must be able to start
+            # before the key exists. Until it does, decision `004`'s resolver
+            # renders each as a named, visible gap and the document says it is
+            # incomplete -- which is the designed behaviour, not a defect. The
+            # company is VAT registered (operator, 2026-08-30); the number
+            # itself is still not committed.
+            - name: MERCHANT_REGISTRY_CODE
+              valueFrom:
+                secretKeyRef: {name: lousydeal-runtime-credentials, key: MERCHANT_REGISTRY_CODE, optional: true}
+            - name: MERCHANT_VAT_NUMBER
+              valueFrom:
+                secretKeyRef: {name: lousydeal-runtime-credentials, key: MERCHANT_VAT_NUMBER, optional: true}
           # Readiness renders the real page: `src/app/page.tsx` calls the
           # store API through the same-origin proxy, so a pod that cannot
           # reach a working backend is correctly pulled from the Service

@@ -185,6 +185,19 @@ patches:
                     valueFrom: {secretKeyRef: {name: lousydeal-test-publishable-key, key: publishableKey}}
                   - name: STRIPE_PUBLISHABLE_KEY
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+                  # Only the two secret-backed fields are repeated here, for
+                  # the same reason every other Secret reference in this file
+                  # is: `nameSuffix` does not rewrite a reference to a Secret
+                  # this kustomization does not own, so each environment names
+                  # its own. The three committed `MERCHANT_*` values are not
+                  # repeated -- there is one company, and a second copy of its
+                  # address is a second thing to keep correct.
+                  - name: MERCHANT_REGISTRY_CODE
+                    valueFrom:
+                      secretKeyRef: {name: lousydeal-test-runtime-credentials, key: MERCHANT_REGISTRY_CODE, optional: true}
+                  - name: MERCHANT_VAT_NUMBER
+                    valueFrom:
+                      secretKeyRef: {name: lousydeal-test-runtime-credentials, key: MERCHANT_VAT_NUMBER, optional: true}
   - target:
       kind: Job
       name: lousydeal-predeploy
