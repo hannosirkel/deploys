@@ -80,6 +80,53 @@ spec:
             # the reference applies to its Omniva credential.
             - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+            # The trader's identity, for the § 55(1)-(2) order confirmation.
+            # C9's `backend/src/config/merchant.ts` reads the same six
+            # variables the storefront reads, from the same private inventory:
+            # decision `004` puts the identity in runtime configuration so that
+            # neither workspace carries it as a literal, and Orange's
+            # Application patches over all six at deploy time.
+            #
+            # **These are the fallback and not the authoritative source**, in
+            # exactly the sense `storefront.yaml` says so at greater length --
+            # the values there and here are one fact, and a difference between
+            # them is a defect rather than a configuration. Real values rather
+            # than placeholders, for the reason that file gives: they are
+            # public business-register facts and a role address, they are the
+            # same in both environments because there is one company, and a
+            # manifest applied without Orange should be able to name its own
+            # trader rather than refuse to.
+            #
+            # An incomplete set sends nothing rather than something deficient:
+            # `readMerchantIdentity` answers `null` for any missing field and
+            # `buildOrderConfirmation` refuses to build from `null`. § 55(2) is
+            # not satisfied by a confirmation that names no trader.
+            - {name: MERCHANT_LEGAL_NAME, value: "Aislopica OÜ"}
+            - {name: MERCHANT_ADDRESS, value: "Pihlaka tn 2, Jüri alevik, Rae vald, Harju maakond, 75301, Estonia"}
+            - {name: MERCHANT_EMAIL, value: "baldrick@lousydeal.com"}
+            - {name: MERCHANT_PHONE_NUMBER, value: "+372 51 35463"}
+            - {name: MERCHANT_REGISTRY_CODE, value: "17584979"}
+            - {name: MERCHANT_VAT_NUMBER, value: EE103022558}
+            # `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS_SERVERNAME`, `SMTP_FROM_NAME`,
+            # `SMTP_ENVELOPE_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD` and
+            # `SITE_BASE_URL` are deliberately absent from this base, and all of
+            # them arrive with C11's Orange patch.
+            #
+            # **Not placeholders**, which is the choice worth stating. A base
+            # carrying a placeholder `SMTP_HOST` would give
+            # `readSmtpRuntimeConfig` a complete-looking set, and the
+            # subscriber would attempt a send per order against a host that is
+            # not there -- a failure logged as "the transport refused" rather
+            # than as "this deployment cannot send mail". With none of them
+            # set, that reader answers `null`, the notification module is not
+            # registered at all, and the subscriber logs `missing a mail
+            # transport` once per order, which is the true statement.
+            #
+            # `SITE_BASE_URL` is absent for a second reason as well. The six
+            # above are committed because they are the same in both
+            # environments -- there is one company -- while a base URL is
+            # exactly what differs between them, so a value here would be wrong
+            # for one of the two.
           # `/health` is `@medusajs/framework`'s own route
           # (`express-loader.js`: `isHealthCheck = (req) => req.path ===
           # "/health"`), not application code -- confirmed installed at

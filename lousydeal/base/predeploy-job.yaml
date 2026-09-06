@@ -141,6 +141,27 @@ spec:
             - {name: module-migrations, mountPath: /node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
             - {name: module-migrations, mountPath: /node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
             - {name: module-migrations, mountPath: /node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
+            # C10's eleventh, and the only one that is not a package. The SMTP
+            # notification provider C8 registered resolves by local path
+            # (`./src/notifications`), and `loadModuleMigrations` computes a
+            # migrations directory for a *provider* exactly as it does for a
+            # module -- so Mikro-ORM's `ensureMigrationsDirExists()` tries to
+            # create `/app/src/notifications/migrations`, which
+            # `readOnlyRootFilesystem: true` refuses.
+            #
+            # Measured, not inferred: `medusa db:migrate` was run against the
+            # built `.medusa/server` with the directory deleted first and the
+            # mail configuration set, and it created the directory. The
+            # reference's README predicts this -- its own count is eleven and
+            # names its SMTP `notifications` provider as one of them.
+            #
+            # **The `deal` module needs no mount**, and that is measured too:
+            # `medusa build` compiles `src/modules/deal/migrations/*.ts` into
+            # the output, so the directory is already there and nothing tries
+            # to create it. The generated `.snapshot-deal.json` is not copied,
+            # which is fine -- it is a `db:generate` artefact and nothing at
+            # runtime reads it.
+            - {name: module-migrations, mountPath: /app/src/notifications/migrations, subPath: notifications, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}

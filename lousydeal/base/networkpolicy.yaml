@@ -204,8 +204,57 @@ spec:
       ports:
         - {port: 9000, protocol: TCP}
 ---
-# `backend` and `worker`, not the reference's larger set, and no
-# `allow-smtp-submission-egress` policy exists in this base at all.
+# Mail leaves through here, and through nothing else.
+#
+# `allow-https-egress` below opens 443 to `0.0.0.0/0`, which is what Stripe
+# needs; submission is 587 and is not covered by it. This policy is therefore
+# the whole of the application's ability to send mail, and it is deliberately
+# the narrowest rule in this file: one port, one destination.
+#
+# ## The CIDR here is a placeholder and must stay one
+#
+# `192.0.2.25/32` is in TEST-NET-1 (RFC 5737), a range reserved for
+# documentation and guaranteed never to be a real host. It is chosen over the
+# reference's `192.168.255.254/32` for one reason: this repository is public,
+# the operator's mail server is on the private mesh, and a plausible-looking
+# private address invites the next reader to assume it is the real one. A
+# documentation range cannot be mistaken for anything, and if Orange's patch
+# ever fails to apply, this policy admits nothing rather than something.
+#
+# Orange replaces both the destination and the port per environment, from
+# `argocd_lousydeal_environments[*].smtp_destination_cidr` and
+# `submission_port` in the operator's private inventory -- the same mechanism
+# the reference uses, and the same one `storefront.yaml`'s `MERCHANT_*` values
+# already rely on. **That patch is C11's.** Between this row and that one, both
+# environments carry this placeholder and can reach no mail server at all,
+# which is the correct state: the SMTP credentials are not projected yet
+# either, so nothing would have anything to authenticate with.
+#
+# `predeploy` is not admitted. It runs migrations and three seed scripts and
+# sends nothing; `backend/src/subscribers/order-placed.ts` is the only sender
+# and it runs under the API and worker images.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-smtp-submission-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 192.0.2.25/32}
+      ports:
+        - {port: 587, protocol: TCP}
+---
+# `backend` and `worker`, not the reference's larger set.
+#
+# `allow-smtp-submission-egress` above is C10's, and until C10 this base
+# carried none at all -- the sentence that used to stand here said so.
 #
 # `backend` needs this: `storefront/src/lib/store-payment.ts` documents that
 # Stripe payment-session creation goes through the *stock* Medusa Store API
