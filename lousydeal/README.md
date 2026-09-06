@@ -105,29 +105,47 @@ is true of every `SITE_*` name and the SMTP block: this storefront reads no
 were there were the reference project's -- `MERCHANT_REGISTERED_ADDRESS`,
 `MERCHANT_CONTACT_ADDRESS`, `MERCHANT_RETURN_ADDRESS` -- and this storefront
 never read any of them, so the prohibition was inherited rather than measured.
-It reads five, and LD-09 gave it four legal documents that need them.
+It reads six, and LD-09 gave it four legal documents that need them.
 
-**Three are committed and two are not, and the split is the contract's §2b.**
-The company, its address and its contact are public business-register facts
-that §2b says may be committed; they are also the same in both environments,
-because there is one company, so they sit in the base rather than in two
-overlays that would drift. A director's name, a registry code, a VAT number and
-a bank account are each "their own decision" and are not covered by it, so the
-two this storefront reads arrive the way §2b requires -- read server-side at
-runtime, never a literal in a repository -- through the sanctioned secrets
-path.
+**All six are committed values, and none of them is a secret.** V14 shipped
+this as a split -- the company, its address and its contact as values, the
+registry code and the VAT number behind an optional `secretKeyRef` -- because
+§2b said those two were each their own decision and had not been decided. The
+operator decided on 2026-09-06 and the answer is `deploys/plepic`'s, which
+publishes the same fields as literals for the same reasons:
 
-Their `secretKeyRef` carries `optional: true`, for the reason
-`STRIPE_PAYMENT_METHOD_CONFIGURATION_ID` above carries it: a pod must start
-before the key exists. Until the operator supplies them, decision `004`'s
-resolver renders each as a named, visible gap and the document says it is
-incomplete. **That is the designed behaviour and not a defect** -- but it does
-mean the imprint is incomplete in both environments until those two keys are
-in OpenBao, which is an operator action outside every repository in this plan.
+Article 6(1) CRD as amended by Directive (EU) 2019/2161 and VÕS § 54¹ oblige a
+trader to publish its name, registered address, contact address and telephone
+number, and Article 5(1)(d) of Directive 2000/31/EC obliges it to name the
+register and its code within it. Each has exactly one correct value, the law's
+requirement is that it be **published**, and a reserved placeholder in one of
+these fields is a legally required disclosure that is wrong rather than a secret
+withheld.
 
-`tests/manifests.sh` checks how each of the five arrives, not merely that it is
-declared: a registry code pasted in as a literal would satisfy a presence check
-and would be exactly the thing a public repository must never hold.
+Withholding two of them protected nothing. It left `/legal/imprint` publishing
+`[REGISTRY CODE NOT CONFIGURED]` and a page-level incompleteness notice, in both
+environments, on the one document whose purpose is completeness.
+
+They are in the base and neither overlay overrides them, because there is one
+company: the overlays differ where the *deployment* differs -- names, ports,
+storage, Secret references -- and the registered identity of the company behind
+the shop is not one of those. The test environment therefore renders the same
+imprint live will, which is the only version of that page worth checking before
+it is public.
+
+**Orange patches over all six at deploy time**, from the private inventory,
+exactly as it does for `plepic-storefront`. What renders is
+`environment.merchant` in
+`orange/roles/argocd/templates/lousydeal-application.yaml.j2`; the values below
+are the fallback that patch supersedes, and they are real rather than
+placeholder for the same reason `plepic/base/storefront.yaml`'s are — a
+manifest applied without Orange should still publish a lawful imprint rather
+than a page full of gaps.
+
+`tests/manifests.sh` asserts each is a non-empty literal and that none arrives
+from a Secret. The check used to run the other way round; what makes it worth
+keeping in either direction is that nothing else here notices an imprint with a
+hole in it.
 
 ## The worker runs the same `args` as the backend
 

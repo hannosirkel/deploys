@@ -205,18 +205,26 @@ FORBIDDEN_ENV_NAMES = %w[
   SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
 ].freeze
 
-# The five `storefront/src/config/runtime-config.ts` reads, and how each one is
-# allowed to arrive.
+# The six `storefront/src/config/runtime-config.ts` reads, every one a committed
+# value.
 #
-# The split is the contract's §2b, not a preference: the company, its address
-# and its contact are public business-register facts it says may be committed;
-# a registry code and a VAT number are each "their own decision" and are not
-# covered, so they may only arrive through the sanctioned secrets path. A value
-# for either in this public repository is the failure this check exists to
-# catch, and it is the kind nothing else would notice -- a registry code looks
-# exactly like configuration.
-MERCHANT_LITERAL_ENV_NAMES = %w[MERCHANT_LEGAL_NAME MERCHANT_ADDRESS MERCHANT_EMAIL].freeze
-MERCHANT_SECRET_ENV_NAMES = %w[MERCHANT_REGISTRY_CODE MERCHANT_VAT_NUMBER].freeze
+# **This used to be a split**, with the registry code and the VAT number behind
+# an optional `secretKeyRef` because §2b had not decided them. The operator
+# decided on 2026-09-06 and the answer is `deploys/plepic`'s: Article 6(1) CRD
+# as amended by Directive (EU) 2019/2161 and VÕS § 54^1 oblige a trader to
+# publish its name, registered address, contact address and telephone number,
+# and Article 5(1)(d) of Directive 2000/31/EC obliges it to name the register
+# and its code within it -- so a reserved placeholder in one of these fields is
+# a legally required disclosure that is wrong rather than a secret withheld.
+#
+# The check is now the other way round and still worth having: each must be a
+# non-empty literal, because the failure this catches is an imprint that renders
+# `[REGISTRY CODE NOT CONFIGURED]` on a page whose whole purpose is
+# completeness, and nothing else here would notice.
+MERCHANT_ENV_NAMES = %w[
+  MERCHANT_LEGAL_NAME MERCHANT_ADDRESS MERCHANT_EMAIL
+  MERCHANT_PHONE_NUMBER MERCHANT_REGISTRY_CODE MERCHANT_VAT_NUMBER
+].freeze
 
 # `seed:administrator` runs only inside the predeploy Job's `npm run
 # predeploy` chain (`backend/package.json`) -- the API and worker
@@ -378,37 +386,18 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   storefront_env = storefront_container.fetch('env', [])
   storefront_names = storefront_env.map { |e| e['name'] }
   expected_storefront_env =
-    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY] +
-    MERCHANT_LITERAL_ENV_NAMES + MERCHANT_SECRET_ENV_NAMES
-  raise 'storefront env must be exactly the eight names runtime-config.ts reads' unless
+    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY] + MERCHANT_ENV_NAMES
+  raise 'storefront env must be exactly the nine names runtime-config.ts reads' unless
     storefront_names.sort == expected_storefront_env.sort
 
-  # How each merchant field arrives, not merely that it is declared. §2b lets
-  # three be committed and says the other two are each their own decision; a
-  # registry code pasted in as a literal would satisfy a presence check and be
-  # exactly the thing this repository must never hold.
+  # Values, not references, and non-empty. A `secretKeyRef` here would be the
+  # old arrangement returning: correct-looking, and an imprint with a hole in
+  # it in both environments.
   merchant_env = storefront_env.to_h { |e| [e['name'], e] }
-  MERCHANT_LITERAL_ENV_NAMES.each do |name|
+  MERCHANT_ENV_NAMES.each do |name|
     entry = merchant_env.fetch(name)
     raise "#{name} must be a committed value" if entry['value'].to_s.strip.empty?
     raise "#{name} must not come from a Secret" if entry.key?('valueFrom')
-  end
-  MERCHANT_SECRET_ENV_NAMES.each do |name|
-    entry = merchant_env.fetch(name)
-    raise "#{name} must never carry a value in this repository" if entry.key?('value')
-    ref = entry.dig('valueFrom', 'secretKeyRef') or raise "#{name} must come from a Secret"
-    # The environment's own Secret, not the base's name with a suffix:
-    # `nameSuffix` does not rewrite a reference to a Secret this kustomization
-    # does not own, so each overlay names its own and the live one keeps the
-    # base's.
-    expected_secret = environment == 'test' ? 'lousydeal-test-runtime-credentials' : 'lousydeal-runtime-credentials'
-    raise "#{name} must read #{expected_secret}" unless ref['name'] == expected_secret
-    raise "#{name} must name itself as the key" unless ref['key'] == name
-    # A pod has to start before the operator has filled the key in. Without
-    # this the whole environment is down until they do, and decision `004`'s
-    # named-gap rendering -- which is the designed behaviour meanwhile -- never
-    # gets the chance to run.
-    raise "#{name} must be optional" unless ref['optional'] == true
   end
 
   # Probes.

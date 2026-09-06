@@ -42,8 +42,8 @@ spec:
             # variables and that there is "no MERCHANT_* field -- no row in
             # this slice renders an imprint". LD-09 rendered four legal
             # documents, so that is no longer true:
-            # `storefront/src/config/runtime-config.ts` now reads eight, the
-            # three below plus five `MERCHANT_*`.
+            # `storefront/src/config/runtime-config.ts` now reads nine, the
+            # three below plus six `MERCHANT_*`.
             #
             # There is still no SITE_*, no redirect map, no external-link id
             # and no CORS variable here: this backend image does not read
@@ -63,31 +63,40 @@ spec:
             # there is one company -- so they belong here and not in an overlay,
             # where two copies of one fact would drift.
             #
-            # **The decision stops at three.** §2b: "Do not extend that
-            # decision. A director's name, a registry code, a VAT number, and a
-            # bank account are each their own decision." The two below are
-            # therefore not values.
+            # **All six are values, and none is a secret** -- and Orange's
+            # Application patches over every one of them at deploy time, from
+            # the private inventory, exactly as it does for `plepic-storefront`.
+            # These are the fallback, not the authoritative source: what renders
+            # is `environment.merchant` in
+            # `orange/roles/argocd/templates/lousydeal-application.yaml.j2`.
+            #
+            # They are real values rather than placeholders for the reason
+            # `deploys/plepic/base/storefront.yaml` carries real ones:
+            #
+            #   Article 6(1) CRD as amended by Directive (EU) 2019/2161 and
+            #   VÕS § 54^1 oblige a trader to publish its name, registered
+            #   address, contact address and telephone number, and Article
+            #   5(1)(d) of Directive 2000/31/EC obliges it to name the register
+            #   and its code within it. Each has exactly one correct value, the
+            #   law's requirement is that it be *published*, and a reserved
+            #   placeholder in one of these fields is a legally required
+            #   disclosure that is wrong rather than a secret withheld.
+            #
+            # Withholding two of them protected nothing and left the imprint
+            # publishing `[REGISTRY CODE NOT CONFIGURED]` in both environments
+            # -- which is what a manifest applied without Orange still renders
+            # if this block is empty.
+            #
+            # They are in the base and not in an overlay because there is one
+            # company: the overlays differ where the *deployment* differs --
+            # names, ports, storage, Secret references -- and the registered
+            # identity of the company behind the shop is not one of those.
             - {name: MERCHANT_LEGAL_NAME, value: "Aislopica OÜ"}
             - {name: MERCHANT_ADDRESS, value: "Pihlaka tn 2, Jüri alevik, Rae vald, Harju maakond, 75301, Estonia"}
             - {name: MERCHANT_EMAIL, value: "baldrick@lousydeal.com"}
-            # Registry code and VAT number reach a page the way §2b requires --
-            # read server-side at runtime, never a literal in a repository --
-            # and this repository is public, so the sanctioned secrets path is
-            # the only way they can arrive at all.
-            #
-            # `optional: true` for the same reason `STRIPE_PAYMENT_METHOD_
-            # CONFIGURATION_ID` above carries it: a pod must be able to start
-            # before the key exists. Until it does, decision `004`'s resolver
-            # renders each as a named, visible gap and the document says it is
-            # incomplete -- which is the designed behaviour, not a defect. The
-            # company is VAT registered (operator, 2026-08-30); the number
-            # itself is still not committed.
-            - name: MERCHANT_REGISTRY_CODE
-              valueFrom:
-                secretKeyRef: {name: lousydeal-runtime-credentials, key: MERCHANT_REGISTRY_CODE, optional: true}
-            - name: MERCHANT_VAT_NUMBER
-              valueFrom:
-                secretKeyRef: {name: lousydeal-runtime-credentials, key: MERCHANT_VAT_NUMBER, optional: true}
+            - {name: MERCHANT_PHONE_NUMBER, value: "+372 51 35463"}
+            - {name: MERCHANT_REGISTRY_CODE, value: "17584979"}
+            - {name: MERCHANT_VAT_NUMBER, value: EE103022558}
           # Readiness renders the real page: `src/app/page.tsx` calls the
           # store API through the same-origin proxy, so a pod that cannot
           # reach a working backend is correctly pulled from the Service
