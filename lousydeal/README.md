@@ -133,6 +133,15 @@ the shop is not one of those. The test environment therefore renders the same
 imprint live will, which is the only version of that page worth checking before
 it is public.
 
+**Orange patches over all six at deploy time**, from the private inventory,
+exactly as it does for `plepic-storefront`. What renders is
+`environment.merchant` in
+`orange/roles/argocd/templates/lousydeal-application.yaml.j2`; the values below
+are the fallback that patch supersedes, and they are real rather than
+placeholder for the same reason `plepic/base/storefront.yaml`'s are — a
+manifest applied without Orange should still publish a lawful imprint rather
+than a page full of gaps.
+
 `tests/manifests.sh` asserts each is a non-empty literal and that none arrives
 from a Secret. The check used to run the other way round; what makes it worth
 keeping in either direction is that nothing else here notices an imprint with a

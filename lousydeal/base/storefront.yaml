@@ -63,12 +63,15 @@ spec:
             # there is one company -- so they belong here and not in an overlay,
             # where two copies of one fact would drift.
             #
-            # **All six are values, and none is a secret.** V14 put the
-            # registry code and the VAT number behind an optional
-            # `secretKeyRef`, because §2b said they were each their own
-            # decision and had not been decided. The operator decided on
-            # 2026-09-06 and the answer is `deploys/plepic`'s, which publishes
-            # the same three as literals:
+            # **All six are values, and none is a secret** -- and Orange's
+            # Application patches over every one of them at deploy time, from
+            # the private inventory, exactly as it does for `plepic-storefront`.
+            # These are the fallback, not the authoritative source: what renders
+            # is `environment.merchant` in
+            # `orange/roles/argocd/templates/lousydeal-application.yaml.j2`.
+            #
+            # They are real values rather than placeholders for the reason
+            # `deploys/plepic/base/storefront.yaml` carries real ones:
             #
             #   Article 6(1) CRD as amended by Directive (EU) 2019/2161 and
             #   VÕS § 54^1 oblige a trader to publish its name, registered
@@ -80,7 +83,9 @@ spec:
             #   disclosure that is wrong rather than a secret withheld.
             #
             # Withholding two of them protected nothing and left the imprint
-            # publishing `[REGISTRY CODE NOT CONFIGURED]` in both environments.
+            # publishing `[REGISTRY CODE NOT CONFIGURED]` in both environments
+            # -- which is what a manifest applied without Orange still renders
+            # if this block is empty.
             #
             # They are in the base and not in an overlay because there is one
             # company: the overlays differ where the *deployment* differs --
