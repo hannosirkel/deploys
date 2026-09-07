@@ -131,16 +131,31 @@ spec:
             # provider whose package ships no migrations directory reproduces
             # this failure and needs another entry here and in
             # `tests/manifests.sh`.
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/payment-stripe/dist/migrations, subPath: payment-stripe, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/auth-emailpass/dist/migrations, subPath: auth-emailpass, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/fulfillment-manual/dist/migrations, subPath: fulfillment-manual, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/notification-local/dist/migrations, subPath: notification-local, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/cache-inmemory/dist/migrations, subPath: cache-inmemory, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/event-bus-redis/dist/migrations, subPath: event-bus-redis, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking/dist/migrations, subPath: locking, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
-            - {name: module-migrations, mountPath: /node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
+            #
+            # **`/app/node_modules`, not `/node_modules`.** These ten sat under
+            # `/node_modules` until Medusa 2.20.1. The modules moved; the
+            # policy did not. That release's lockfile nests 80 packages under
+            # the backend workspace instead of hoisting them, so `lousydeal`'s
+            # `backend/Dockerfile` now ships two trees -- `/src/node_modules`
+            # to `/node_modules`, `/src/backend/node_modules` to
+            # `/app/node_modules` -- and every module named below is in the
+            # second one. Re-measured exactly the way the original ten were:
+            # the image built from that fix, run as `--read-only --user
+            # 10001:10001` against a real PostgreSQL and Redis, clears
+            # `npm run predeploy` end to end with these paths, and fails with
+            # ENOENT on `mkdir` for all ten with the old ones. A later bump
+            # that hoists them back would need this list moved again, and
+            # would announce itself the same way this did.
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/payment-stripe/dist/migrations, subPath: payment-stripe, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/auth-emailpass/dist/migrations, subPath: auth-emailpass, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/fulfillment-manual/dist/migrations, subPath: fulfillment-manual, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/notification-local/dist/migrations, subPath: notification-local, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/cache-inmemory/dist/migrations, subPath: cache-inmemory, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/event-bus-redis/dist/migrations, subPath: event-bus-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/locking/dist/migrations, subPath: locking, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
+            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
             # C10's eleventh, and the only one that is not a package. The SMTP
             # notification provider C8 registered resolves by local path
             # (`./src/notifications`), and `loadModuleMigrations` computes a
