@@ -400,6 +400,35 @@ def assert_manifest(path, environment:, namespace:, suffix:)
     raise "#{name} must not come from a Secret" if entry.key?('valueFrom')
   end
 
+  # C10: the two workloads that can send mail carry the same six trader values,
+  # from the same private inventory and with the same standing -- a fallback
+  # Orange patches over. The storefront's copy and these are one fact, so they
+  # are compared against each other rather than against a second list: a
+  # difference between them is a defect, not a configuration.
+  %w[backend worker].each do |component|
+    container = pod_containers(pod_spec(resource(documents, 'Deployment', "lousydeal-#{component}#{suffix}"))).first
+    entries = container.fetch('env', []).to_h { |e| [e['name'], e] }
+
+    MERCHANT_ENV_NAMES.each do |name|
+      entry = entries.fetch(name) { raise "#{component} must carry #{name}: § 55(2) needs the trader named in the confirmation" }
+      raise "#{component}/#{name} must be a committed value" if entry['value'].to_s.strip.empty?
+      raise "#{component}/#{name} must not come from a Secret" if entry.key?('valueFrom')
+      raise "#{component}/#{name} differs from the storefront's" unless entry['value'] == storefront_env.find { |e| e['name'] == name }['value']
+    end
+
+    # **The absences are asserted too, and they are deliberate.** A base
+    # carrying a placeholder `SMTP_HOST` would give `readSmtpRuntimeConfig` a
+    # complete-looking set, and the subscriber would attempt a send per order
+    # against a host that is not there -- logged as "the transport refused"
+    # rather than as "this deployment cannot send mail". With none set, that
+    # reader answers `null` and the log says the true thing. `SITE_BASE_URL` is
+    # absent for a second reason: the six above are the same in both
+    # environments because there is one company, while a base URL is exactly
+    # what differs between them. All of these arrive with C11's Orange patch.
+    unexpected = entries.keys.grep(/\ASMTP_|\ASITE_/)
+    raise "#{component} must not carry #{unexpected.join(', ')} in the base: C11's Orange patch supplies them" unless unexpected.empty?
+  end
+
   # Probes.
   backend = resource(documents, 'Deployment', "lousydeal-backend#{suffix}")
   backend_container = pod_containers(pod_spec(backend)).first
@@ -561,11 +590,31 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   https = resource(documents, 'NetworkPolicy', "allow-https-egress#{suffix}")
   raise 'HTTPS egress selector mismatch' unless https.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
     %w[backend worker backup].sort
-  raise 'no SMTP egress policy belongs in this application' if all_policies.any? { |p| p.dig('metadata', 'name')&.start_with?('allow-smtp') }
+  # **This assertion used to be its own inverse.** Until C10 it read "no SMTP
+  # egress policy belongs in this application", which was true while nothing
+  # sent mail. C9 made the backend able to send and C10 gives it the one route
+  # out; a guard still asserting the absence would have had to be deleted
+  # rather than inverted, and a deleted guard is a rule nobody is holding.
+  smtp = resource(documents, 'NetworkPolicy', "allow-smtp-submission-egress#{suffix}")
+  raise 'SMTP egress selector mismatch' unless smtp.dig('spec', 'podSelector', 'matchExpressions', 0, 'values').sort ==
+    %w[backend worker].sort
+  smtp_rules = smtp.dig('spec', 'egress')
+  raise 'SMTP egress must be one rule' unless smtp_rules.length == 1
+  raise 'SMTP egress must be submission only' unless smtp_rules[0]['ports'] == [{ 'port' => 587, 'protocol' => 'TCP' }]
+  raise 'SMTP egress must name exactly one destination' unless smtp_rules[0]['to'].length == 1
+
+  # The committed destination is a documentation address and must stay one:
+  # this repository is public, and Orange replaces both the CIDR and the port
+  # per environment from the private inventory. A real-looking private address
+  # here would invite the next reader to believe it, and if Orange's patch ever
+  # failed to apply, this policy would admit something rather than nothing.
+  smtp_cidr = smtp_rules[0].dig('to', 0, 'ipBlock', 'cidr')
+  raise "SMTP destination #{smtp_cidr} is not in TEST-NET-1" unless smtp_cidr.start_with?('192.0.2.')
 
   expected_policy_names = %w[
     default-deny allow-storefront-ingress allow-backend-ingress allow-postgresql-ingress allow-redis-ingress
-    allow-dns-egress allow-postgresql-egress allow-redis-egress allow-storefront-backend-egress allow-https-egress
+    allow-dns-egress allow-postgresql-egress allow-redis-egress allow-storefront-backend-egress
+    allow-smtp-submission-egress allow-https-egress
   ].map { |name| "#{name}#{suffix}" }.sort
   raise 'NetworkPolicy set mismatch' unless all_policies.map { |p| p.dig('metadata', 'name') }.sort == expected_policy_names
 
@@ -576,6 +625,18 @@ def assert_manifest(path, environment:, namespace:, suffix:)
     payment-stripe auth-emailpass fulfillment-manual notification-local cache-inmemory
     event-bus-redis locking locking-redis file file-local
   ].map { |name| "/node_modules/@medusajs/#{name}/dist/migrations" }
+  # C10's eleventh, and the only one that is not a package. The SMTP provider
+  # C8 registered resolves by local path, and `loadModuleMigrations` computes a
+  # migrations directory for a provider exactly as it does for a module -- so
+  # `ensureMigrationsDirExists()` tries to create this one and the read-only
+  # root refuses. Measured: `medusa db:migrate` against the built
+  # `.medusa/server`, with the directory deleted first, created it.
+  #
+  # The `deal` module needs none, which is the same measurement the other way:
+  # `medusa build` compiles its migrations into the output, so the directory
+  # ships in the image. A mount for it appearing here would be a sign somebody
+  # copied the reference rather than measuring.
+  migration_paths << '/app/src/notifications/migrations'
   expected_hook = {
     'argocd.argoproj.io/hook' => 'Sync',
     'argocd.argoproj.io/hook-delete-policy' => 'BeforeHookCreation,HookSucceeded',
@@ -592,6 +653,8 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   raise 'the module-migrations mounts must reach only the predeploy Job' if other_workloads.any? do |workload|
     pod_containers(pod_spec(workload)).any? { |c| c.fetch('volumeMounts', []).any? { |m| migration_paths.include?(m['mountPath']) } }
   end
+  raise 'a deal-module migrations mount means somebody stopped measuring' if
+    predeploy_mount_paths.any? { |path| path.include?('modules/deal') }
 
   # PostgreSQL: decision 003, an own StatefulSet per environment. `nameSuffix`
   # gives the test one its `-test` name; this asserts the base and the digest

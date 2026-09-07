@@ -338,7 +338,7 @@ would buy a wait nothing uses, and this build is a single replica behind no
 public traffic in LD-01, so the accepted cost of an abrupt in-flight-request
 drop is bounded. **This is an explicit acceptance, not an oversight.**
 
-## Ten migration directories, not eleven
+## Eleven migration directories, not ten
 
 The predeploy Job mounts one `emptyDir` at ten paths inside the image, each
 with its own `subPath` and each `readOnly` -- `readOnlyRootFilesystem: true`
@@ -355,9 +355,24 @@ pass (`payment-stripe`, `auth-emailpass`, `fulfillment-manual`,
 `notification-local`, `cache-inmemory`, `event-bus-redis`, `locking`,
 `file`), and -- exactly as the reference predicts -- `locking` and `file`
 each hide a second directory the log names only once the first eight are
-mounted: `locking-redis` and `file-local`. Ten in total. `omniva` and the
-reference's own SMTP `notifications` provider are absent because this
-application registers neither module.
+mounted: `locking-redis` and `file-local`. Ten at that time. `omniva` was absent then and still
+is; the reference's SMTP `notifications` provider was too, and is not any
+more.
+
+**C10 makes it eleven.** C8 registered an SMTP notification provider by local
+path (`./src/notifications`), and `loadModuleMigrations` computes a migrations
+directory for a *provider* exactly as it does for a module -- so
+`ensureMigrationsDirExists()` tries to create `/app/src/notifications/
+migrations` and the read-only root refuses. Measured rather than inferred from
+the reference: `medusa db:migrate` was run against the built `.medusa/server`
+with that directory deleted first and the mail configuration set, and the run
+created it.
+
+**The `deal` module C1 added needs no mount**, which is the same measurement
+run the other way. `medusa build` compiles `src/modules/deal/migrations/*.ts`
+into the output, so the directory ships in the image and nothing tries to
+create it. The `.snapshot-deal.json` beside the source is not copied, which is
+correct -- it is a `db:generate` artefact and nothing at runtime reads it.
 
 With all ten mounted, `npm run predeploy` clears `db:migrate` and reaches
 `configure:commerce`, where it exits 1 on this image -- `27586a1`'s currency
