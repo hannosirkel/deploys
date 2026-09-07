@@ -621,10 +621,16 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   # The predeploy Job's ten `module-migrations` mounts -- measured directly
   # against the built image under `--read-only --user 10001:10001`; see
   # `base/predeploy-job.yaml` for the full account.
+  #
+  # `/app/node_modules`, not `/node_modules`, since Medusa 2.20.1: that
+  # lockfile nests these packages under the backend workspace rather than
+  # hoisting them, so `lousydeal`'s `backend/Dockerfile` copies that tree to
+  # `/app/node_modules` and the modules went with it. The prefix is written
+  # once so this list cannot drift half-way to a new layout.
   migration_paths = %w[
     payment-stripe auth-emailpass fulfillment-manual notification-local cache-inmemory
     event-bus-redis locking locking-redis file file-local
-  ].map { |name| "/node_modules/@medusajs/#{name}/dist/migrations" }
+  ].map { |name| "/app/node_modules/@medusajs/#{name}/dist/migrations" }
   # C10's eleventh, and the only one that is not a package. The SMTP provider
   # C8 registered resolves by local path, and `loadModuleMigrations` computes a
   # migrations directory for a provider exactly as it does for a module -- so
