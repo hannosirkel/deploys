@@ -86,7 +86,7 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
-            # Ten empty directories, one `emptyDir` and ten `subPath`s --
+            # Eleven empty directories, one `emptyDir` and eleven `subPath`s --
             # measured directly against `localhost/lousydeal-backend:t11`, the
             # only backend image on this host. That image was built before
             # both `714b61d` and `27586a1`, not at this row's HEAD -- see
@@ -156,6 +156,20 @@ spec:
             - {name: module-migrations, mountPath: /app/node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
             - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
             - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
+            # **An eleventh, and the first that is not a package.** LD-04's
+            # Printful fulfilment provider is this repository's own code, at
+            # `/app/src/modules/printful`, and the Migrator treats it exactly
+            # as it treats the ten above: `ensureMigrationsDirExists()` creates
+            # the directory, which fails under `readOnlyRootFilesystem: true`.
+            #
+            # It only began failing when the provider started *loading here*.
+            # `medusa-config.ts` registers the module only when Printful is
+            # configured, and until 2026-09-10 this Job was never given the
+            # token or the artwork base -- so the provider was absent from
+            # predeploy, no directory was wanted, and migrate passed. Giving
+            # the Job Printful, so `configure-commerce.ts` could create the
+            # shipping option owned by that provider, is what surfaced it.
+            - {name: module-migrations, mountPath: /app/src/modules/printful/migrations, subPath: printful, readOnly: true}
             # C10's eleventh, and the only one that is not a package. The SMTP
             # notification provider C8 registered resolves by local path
             # (`./src/notifications`), and `loadModuleMigrations` computes a
