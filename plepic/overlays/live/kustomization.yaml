@@ -55,11 +55,21 @@ patches:
         path: /spec/template/spec/containers/0/resources
         value:
           requests:
-            cpu: 200m
-            memory: 256Mi
+            cpu: 100m
+            memory: 384Mi
           limits:
-            cpu: "1"
-            memory: 1Gi
+            cpu: 500m
+            memory: 512Mi
+  - target: {kind: StatefulSet, name: plepic-postgresql}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"50m","memory":"128Mi"},"limits":{"cpu":"500m","memory":"256Mi"}}}]'
+  - target: {kind: StatefulSet, name: plepic-redis}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"32Mi"},"limits":{"cpu":"100m","memory":"128Mi"}}}]'
+  - target: {kind: Deployment, name: plepic-backend}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"100m","memory":"512Mi"},"limits":{"cpu":"500m","memory":"1Gi"}}}]'
+  - target: {kind: Deployment, name: plepic-worker}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"256Mi"},"limits":{"cpu":"250m","memory":"512Mi"}}}]'
+  - target: {kind: Deployment, name: plepic-storefront}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"500m","memory":"512Mi"}}}]'
   - target:
       kind: Deployment
       name: plepic-backend

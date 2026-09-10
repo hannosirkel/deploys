@@ -1992,22 +1992,22 @@ require 'tempfile'
 require 'uri'
 
 live_resources = {
-  'postgresql' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'redis' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'backend' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'worker' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'storefront' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'predeploy' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
-  'catalogue-import' => { 'requests' => { 'cpu' => '200m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '1', 'memory' => '1Gi' } },
+  'postgresql' => { 'requests' => { 'cpu' => '50m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '256Mi' } },
+  'redis' => { 'requests' => { 'cpu' => '25m', 'memory' => '32Mi' }, 'limits' => { 'cpu' => '100m', 'memory' => '128Mi' } },
+  'backend' => { 'requests' => { 'cpu' => '100m', 'memory' => '512Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '1Gi' } },
+  'worker' => { 'requests' => { 'cpu' => '25m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '512Mi' } },
+  'storefront' => { 'requests' => { 'cpu' => '100m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '384Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'catalogue-import' => { 'requests' => { 'cpu' => '100m', 'memory' => '384Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
 }
 test_resources = {
-  'postgresql' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'redis' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'backend' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'worker' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'storefront' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
-  'catalogue-import' => { 'requests' => { 'cpu' => '100m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'postgresql' => { 'requests' => { 'cpu' => '25m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '256Mi' } },
+  'redis' => { 'requests' => { 'cpu' => '25m', 'memory' => '32Mi' }, 'limits' => { 'cpu' => '100m', 'memory' => '128Mi' } },
+  'backend' => { 'requests' => { 'cpu' => '50m', 'memory' => '448Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '768Mi' } },
+  'worker' => { 'requests' => { 'cpu' => '25m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '512Mi' } },
+  'storefront' => { 'requests' => { 'cpu' => '25m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '256Mi' } },
+  'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '320Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  'catalogue-import' => { 'requests' => { 'cpu' => '100m', 'memory' => '320Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
 }
 runtime_keys = %w[COOKIE_SECRET DATABASE_PASSWORD JWT_SECRET NEWSLETTER_API_KEY NEWSLETTER_LIST_ID REDIS_PASSWORD SMTP_PASSWORD SMTP_USERNAME STRIPE_PAYMENT_METHOD_CONFIGURATION_ID STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET TURNSTILE_SECRET_KEY TURNSTILE_SITE_KEY]
 admin_keys = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD POSTGRES_SUPERUSER_PASSWORD]

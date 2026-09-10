@@ -115,7 +115,26 @@ def env_entry(container, name)
   container.fetch('env', []).find { |item| item['name'] == name }
 end
 
-def assert_pod_hardening(document)
+RESOURCE_CONTRACTS = {
+  'live' => {
+    'postgresql' => { 'requests' => { 'cpu' => '50m', 'memory' => '96Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '256Mi' } },
+    'redis' => { 'requests' => { 'cpu' => '25m', 'memory' => '32Mi' }, 'limits' => { 'cpu' => '100m', 'memory' => '128Mi' } },
+    'backend' => { 'requests' => { 'cpu' => '75m', 'memory' => '384Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '768Mi' } },
+    'worker' => { 'requests' => { 'cpu' => '25m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '512Mi' } },
+    'storefront' => { 'requests' => { 'cpu' => '50m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '256Mi' } },
+    'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '384Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  },
+  'test' => {
+    'postgresql' => { 'requests' => { 'cpu' => '25m', 'memory' => '96Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '256Mi' } },
+    'redis' => { 'requests' => { 'cpu' => '25m', 'memory' => '32Mi' }, 'limits' => { 'cpu' => '100m', 'memory' => '128Mi' } },
+    'backend' => { 'requests' => { 'cpu' => '50m', 'memory' => '512Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '768Mi' } },
+    'worker' => { 'requests' => { 'cpu' => '25m', 'memory' => '256Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '512Mi' } },
+    'storefront' => { 'requests' => { 'cpu' => '25m', 'memory' => '128Mi' }, 'limits' => { 'cpu' => '250m', 'memory' => '256Mi' } },
+    'predeploy' => { 'requests' => { 'cpu' => '100m', 'memory' => '320Mi' }, 'limits' => { 'cpu' => '500m', 'memory' => '512Mi' } },
+  },
+}.freeze
+
+def assert_pod_hardening(document, environment:)
   pod = pod_spec(document)
   raise "missing pod spec on #{document.dig('metadata', 'name')}" unless pod
   raise 'service account token must be disabled' unless pod['automountServiceAccountToken'] == false
@@ -130,15 +149,11 @@ def assert_pod_hardening(document)
     raise 'host ports are forbidden' if container.fetch('ports', []).any? { |port| port.key?('hostPort') }
     raise "resources missing on #{container['name']}" unless
       container['resources']&.key?('requests') && container['resources']&.key?('limits')
-    # T19: sized from measurement, not from a guess. T13 requested 200m (live)
-    # and 100m (test) per workload; measured against the running deployment
-    # every pod used 1-19m, so ten pods reserved 1700m for 77m of work and the
-    # node reached 99% of its twelve allocatable CPUs -- at which point live's
-    # predeploy Job could not schedule and live could not adopt a new digest.
-    # 50m is a little over twice the highest figure observed. Pinned because a
-    # request that drifts back up is invisible until a Job stops scheduling.
-    raise "cpu request on #{container['name']} must be 50m, sized by measurement" unless
-      container.dig('resources', 'requests', 'cpu') == '50m'
+    workload_name = document.dig('metadata', 'name')
+      .sub(/\Alousydeal-/, '').sub(/-test\z/, '')
+    expected = RESOURCE_CONTRACTS.fetch(environment).fetch(workload_name)
+    raise "resource contract mismatch on #{workload_name}" unless
+      container['resources'] == expected
   end
 end
 
@@ -266,7 +281,9 @@ def assert_manifest(path, environment:, namespace:, suffix:)
     documents.any? { |document| %w[Role RoleBinding ClusterRole ClusterRoleBinding].include?(document['kind']) }
   raise 'resource namespace mismatch' unless documents.all? { |document| document.dig('metadata', 'namespace') == namespace }
 
-  workloads(documents).each { |document| assert_pod_hardening(document) }
+  workloads(documents).each do |document|
+    assert_pod_hardening(document, environment: environment)
+  end
 
   service_account = resource(documents, 'ServiceAccount', "lousydeal-predeploy#{suffix}")
   raise 'predeploy service account must not mount a token' unless service_account['automountServiceAccountToken'] == false

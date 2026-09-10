@@ -57,11 +57,21 @@ patches:
         path: /spec/template/spec/containers/0/resources
         value:
           requests:
-            cpu: 50m
-            memory: 128Mi
+            cpu: 100m
+            memory: 320Mi
           limits:
             cpu: 500m
             memory: 512Mi
+  - target: {kind: StatefulSet, name: lousydeal-postgresql}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"96Mi"},"limits":{"cpu":"250m","memory":"256Mi"}}}]'
+  - target: {kind: StatefulSet, name: lousydeal-redis}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"32Mi"},"limits":{"cpu":"100m","memory":"128Mi"}}}]'
+  - target: {kind: Deployment, name: lousydeal-backend}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"50m","memory":"512Mi"},"limits":{"cpu":"500m","memory":"768Mi"}}}]'
+  - target: {kind: Deployment, name: lousydeal-worker}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"256Mi"},"limits":{"cpu":"250m","memory":"512Mi"}}}]'
+  - target: {kind: Deployment, name: lousydeal-storefront}
+    patch: '[{"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"25m","memory":"128Mi"},"limits":{"cpu":"250m","memory":"256Mi"}}}]'
   # `nameSuffix` above renames the Kubernetes objects this environment owns,
   # but every value below is a plain string inside an env var -- kustomize has
   # no reason to know `lousydeal-postgresql` inside a `DATABASE_HOST` value

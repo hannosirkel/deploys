@@ -54,23 +54,16 @@ the reference template's `replace /spec/ingress/0/from` patch
 `backend` here; it must continue not to, regardless of what it does at index
 1, or it would delete this rule and substitute a private CIDR at index 0.
 
-## CPU requests are measured, memory is not yet
+## Resource requests follow measured working sets
 
-Both overlays request `cpu: 50m` per workload. T13 requested 200m (live) and
-100m (test), which was a guess: measured against the running deployment on
-2026-09-03, every pod used between 1m and 19m — 38m across live's five and 39m
-across test's five, against 1700m reserved. The node reached **99% of its twelve
-allocatable CPUs**, live's predeploy Job stopped scheduling with `Insufficient
-cpu`, and live could no longer adopt a new digest. `lousydeal/tests/manifests.sh`
-pins the value, because a request that drifts back up is invisible until a Job
-fails to schedule.
-
-**Memory was not changed, and is under-requested rather than over.** The same
-measurement put live's backend at 298Mi against a 256Mi request and test's at
-260Mi against 128Mi — so the scheduler underestimates both, test by roughly
-half. Node memory was at 37%, so nothing is at risk today, and correcting it is
-outside the row that fixed the CPU figures. **It is recorded here rather than
-carried silently.**
+The live and test overlays request 225m and 150m CPU respectively across their
+five standing workloads. Per-container values preserve burst limits while
+avoiding the earlier scheduler pressure that prevented predeploy Jobs from
+starting. Memory requests are also per workload: backend and worker requests
+cover their measured 30-day working sets, while PostgreSQL and Redis retain
+smaller allocations appropriate to their observed use. The manifest contract
+pins every request and limit so a blanket overlay cannot silently regress the
+sizing.
 
 ## PostgreSQL is Lousy Deal's own
 
