@@ -86,8 +86,8 @@ def assert_manifest(path, name:, namespace:, port:, database:, user:, secret:, l
     'runAsGroup' => 10_001,
   }
   raise 'resource contract mismatch' unless container['resources'] == {
-    'requests' => { 'cpu' => '100m', 'memory' => '64Mi' },
-    'limits' => { 'cpu' => '250m', 'memory' => '128Mi' },
+    'requests' => { 'cpu' => '10m', 'memory' => '64Mi' },
+    'limits' => { 'cpu' => '100m', 'memory' => '128Mi' },
   }
 
   environment = container.fetch('env').to_h { |entry| [entry['name'], entry['value']] }
