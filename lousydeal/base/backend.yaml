@@ -54,6 +54,7 @@ spec:
               protocol: TCP
           env:
             - {name: MEDUSA_WORKER_MODE, value: server}
+            - {name: STORE_OPEN, value: "false"}
             - {name: DATABASE_HOST, value: lousydeal-postgresql}
             - {name: DATABASE_PORT, value: "5432"}
             - {name: DATABASE_NAME, value: lousydeal}
