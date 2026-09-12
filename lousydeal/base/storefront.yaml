@@ -42,8 +42,9 @@ spec:
             # variables and that there is "no MERCHANT_* field -- no row in
             # this slice renders an imprint". LD-09 rendered four legal
             # documents, so that is no longer true:
-            # `storefront/src/config/runtime-config.ts` now reads nine, the
-            # three below plus six `MERCHANT_*`.
+            # `storefront/src/config/runtime-config.ts` now reads twelve: the
+            # three integration settings, the closed-store switch, two
+            # optional analytics identifiers and six `MERCHANT_*` values.
             #
             # There is still no SITE_*, no redirect map, no external-link id
             # and no CORS variable here: this backend image does not read
@@ -55,6 +56,15 @@ spec:
               valueFrom: {secretKeyRef: {name: lousydeal-publishable-key, key: publishableKey}}
             - name: STRIPE_PUBLISHABLE_KEY
               valueFrom: {secretKeyRef: {name: lousydeal-runtime-credentials, key: STRIPE_PUBLISHABLE_KEY}}
+            # LD-08's public-safe default. Only the exact string `true` opens
+            # commerce; Orange must make that later change explicitly.
+            - {name: STORE_OPEN, value: "false"}
+            # Non-secret runtime seams for Orange's live-only patch. Empty is
+            # deliberately equivalent to absent in runtime-config: neither
+            # overlay enables analytics merely by rendering this base, and no
+            # account identifier is committed here.
+            - {name: GOOGLE_ANALYTICS_TAG_ID, value: ""}
+            - {name: META_PIXEL_ID, value: ""}
             # The trader details a customer must be able to find. The contract's
             # §2b records these three and says committing them "is a deliberate
             # §2a decision rather than an oversight": they are public

@@ -56,6 +56,7 @@ spec:
           # boot. This Job is their only consumer; see `env:` below.
           args: [npm, run, predeploy]
           env:
+            - {name: STORE_OPEN, value: "false"}
             - {name: DATABASE_HOST, value: lousydeal-postgresql}
             - {name: DATABASE_PORT, value: "5432"}
             - {name: DATABASE_NAME, value: lousydeal}
