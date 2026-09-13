@@ -4,9 +4,10 @@ This application root contains the namespaced Kubernetes resources for the
 Lousy Deal store. Application source and image builds live in the separate
 `hannosirkel/lousydeal` repository; Orange/Ansible owns namespaces, Pod
 Security labels, External Secrets projections, Argo CD Applications, private
-source ranges, and deployment orchestration -- none of that exists for Lousy
-Deal yet (T14/T15), so these manifests are inert on merge: files in a
-repository, checked by CI, watched by nothing.
+source ranges, and deployment orchestration. Orange's Lousy Deal Applications
+reconcile these manifests from `main`, so a manifest merge can roll affected
+workloads after Argo observes it; image digests still change only through the
+application release workflow.
 
 `base/` defines the shared PostgreSQL, Redis, Medusa backend and worker,
 storefront, migration Job, Services and NetworkPolicies. There is no assets
@@ -90,6 +91,12 @@ or analytics Secret. Orange owns the later live-only non-secret runtime patch;
 test remains unconfigured. Backend, worker and predeploy never receive either
 analytics variable.
 
+`SITE_BASE_URL` is reserved the same way on the storefront. Orange supplies
+each environment's canonical origin at runtime; an empty base remains inert.
+The storefront uses it only to redirect that origin's exact `www` alias, so
+the destination never comes from a request header and no environment-specific
+hostname is baked into the image or committed here.
+
 `backend/src/config/runtime.ts` requires, at module scope, the five
 `DATABASE_*` parts, the three `REDIS_*` parts, `JWT_SECRET`, `COOKIE_SECRET`,
 `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` on every workload that loads
@@ -104,9 +111,9 @@ the same reasoning the reference applies to its own late-bootstrap credential.
 may want them required too" -- not this one). Declaring a name nothing reads
 is dead configuration copied by habit, not caution, so `tests/manifests.sh`
 refuses it as a positive assertion rather than leaving it unstated. The same
-is true of every `SITE_*` name and the SMTP block: this storefront reads no
-`SITE_*` variable at all, and nothing in this application sends mail, so no
-`allow-smtp-submission-egress` policy exists in this base.
+is true of `SITE_CANONICAL_HOST` and `SITE_TEST_HOSTNAMES`: the storefront reads
+neither. `SITE_BASE_URL` is the sole SITE value it consumes and is the empty
+runtime seam described above.
 
 **`MERCHANT_*` used to be on that list and is not any more.** The names that
 were there were the reference project's -- `MERCHANT_REGISTERED_ADDRESS`,

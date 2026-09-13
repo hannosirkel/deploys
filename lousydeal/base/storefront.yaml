@@ -42,12 +42,13 @@ spec:
             # variables and that there is "no MERCHANT_* field -- no row in
             # this slice renders an imprint". LD-09 rendered four legal
             # documents, so that is no longer true:
-            # `storefront/src/config/runtime-config.ts` now reads twelve: the
+            # `storefront/src/config/runtime-config.ts` now reads thirteen: the
             # three integration settings, the closed-store switch, two
-            # optional analytics identifiers and six `MERCHANT_*` values.
+            # optional analytics identifiers, the canonical origin and six
+            # `MERCHANT_*` values.
             #
-            # There is still no SITE_*, no redirect map, no external-link id
-            # and no CORS variable here: this backend image does not read
+            # There is still no redirect map, external-link id or CORS
+            # variable here: this backend image does not read
             # `STORE_CORS`/`ADMIN_CORS`/`AUTH_CORS` (`backend/src/config/
             # runtime.ts` requires neither), so declaring them on any workload
             # in this base would be configuration nothing reads.
@@ -59,6 +60,10 @@ spec:
             # LD-08's public-safe default. Only the exact string `true` opens
             # commerce; Orange must make that later change explicitly.
             - {name: STORE_OPEN, value: "false"}
+            # Orange patches the environment's canonical origin over this
+            # empty public-safe seam. Empty is inert, so an unpatched base
+            # cannot redirect from a request-controlled host.
+            - {name: SITE_BASE_URL, value: ""}
             # Non-secret runtime seams for Orange's live-only patch. Empty is
             # deliberately equivalent to absent in runtime-config: neither
             # overlay enables analytics merely by rendering this base, and no
