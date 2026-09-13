@@ -212,7 +212,9 @@ ANALYTICS_ENV_NAMES = %w[GOOGLE_ANALYTICS_TAG_ID META_PIXEL_ID].freeze
 #
 # `backend/src/config/runtime.ts` reads none of the three CORS variables (its
 # own header: "a later row may want them required too" -- not this one), and
-# this repository's storefront reads no `SITE_*` variable at all.
+# `SITE_BASE_URL` is the one SITE_* value the storefront now reads. The base
+# reserves it as an empty, public-safe seam below; Orange owns both real
+# environment-specific origins.
 #
 # **`MERCHANT_*` used to be on this list and is not any more.** The names that
 # were here -- `MERCHANT_REGISTERED_ADDRESS`, `MERCHANT_CONTACT_ADDRESS`,
@@ -222,7 +224,7 @@ ANALYTICS_ENV_NAMES = %w[GOOGLE_ANALYTICS_TAG_ID META_PIXEL_ID].freeze
 # gave it four legal documents that need them.
 FORBIDDEN_ENV_NAMES = %w[
   STORE_CORS ADMIN_CORS AUTH_CORS
-  SITE_BASE_URL SITE_CANONICAL_HOST SITE_TEST_HOSTNAMES
+  SITE_CANONICAL_HOST SITE_TEST_HOSTNAMES
   MERCHANT_REGISTERED_ADDRESS MERCHANT_CONTACT_ADDRESS MERCHANT_RETURN_ADDRESS
   SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
 ].freeze
@@ -410,10 +412,16 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   storefront_env = storefront_container.fetch('env', [])
   storefront_names = storefront_env.map { |e| e['name'] }
   expected_storefront_env =
-    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY STORE_OPEN] +
+    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY STORE_OPEN SITE_BASE_URL] +
     ANALYTICS_ENV_NAMES + MERCHANT_ENV_NAMES
-  raise 'storefront env must be exactly the twelve names runtime-config.ts reads' unless
+  raise 'storefront env must be exactly the thirteen names runtime-config.ts reads' unless
     storefront_names.sort == expected_storefront_env.sort
+
+  site_base_url = env_entry(storefront_container, 'SITE_BASE_URL')
+  raise "#{environment}/storefront SITE_BASE_URL must default to an empty literal" unless
+    site_base_url&.fetch('value', nil) == '' && !site_base_url.key?('valueFrom')
+  raise "#{environment}/predeploy must not receive SITE_BASE_URL from the public base" if
+    env_entry(pod_containers(pod_spec(predeploy)).first, 'SITE_BASE_URL')
 
   # The committed default is closed everywhere that assembles application
   # runtime configuration. A Secret reference or overlay-dependent value here
