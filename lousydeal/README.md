@@ -76,6 +76,20 @@ instance was rejected. Redis is the same shape, for the same reason.
 
 ## What the backend image needs, and what it does not
 
+### The deployable default is a closed store
+
+LD-08 adds `STORE_OPEN=false` as a literal to the storefront, backend, worker
+and predeploy Job. This is desired state, not a placeholder: only an explicit
+later runtime patch to the exact string `true` opens commerce. Both live and
+test overlays therefore render closed from this repository alone.
+
+The storefront also reserves `GOOGLE_ANALYTICS_TAG_ID` and `META_PIXEL_ID` as
+empty literals. Empty is read as absent by the application, so neither overlay
+loads analytics and this public repository holds no vendor account identifier
+or analytics Secret. Orange owns the later live-only non-secret runtime patch;
+test remains unconfigured. Backend, worker and predeploy never receive either
+analytics variable.
+
 `backend/src/config/runtime.ts` requires, at module scope, the five
 `DATABASE_*` parts, the three `REDIS_*` parts, `JWT_SECRET`, `COOKIE_SECRET`,
 `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` on every workload that loads
@@ -444,7 +458,9 @@ Service's own port and the storefront's `MEDUSA_BACKEND_URL` agree), the
 required- and forbidden-environment-variable contracts
 (including that `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD` reach only the
 predeploy Job, sourced from the environment-scoped `*-database-admin`
-Secret and from no other Secret name, and never via `envFrom`), digest-pinned
+Secret and from no other Secret name, and never via `envFrom`), the literal
+closed-store default on all four application workloads, the analytics-free
+render and storefront-only analytics seam, digest-pinned
 images and their census, the predeploy migration-mount contract, and the
 Sync-hook wave ordering. These manifests describe desired state only; their
 presence here does not by itself claim that either environment has finished a

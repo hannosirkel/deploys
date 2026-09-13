@@ -196,8 +196,15 @@ BACKEND_IMAGE_REQUIRED_ENVIRONMENT = %w[
   DATABASE_HOST DATABASE_PORT DATABASE_NAME DATABASE_USER DATABASE_PASSWORD
   REDIS_HOST REDIS_PORT REDIS_PASSWORD
   JWT_SECRET COOKIE_SECRET
-  STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+  STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STORE_OPEN
 ].freeze
+
+# LD-08 keeps these names in the shared storefront contract so Orange can
+# supply the live non-secret identifiers at runtime. The public base supplies
+# no identifier at all: an empty literal is read as absent by runtime-config,
+# and test must retain that absence. They are not credentials and must never
+# be projected from a Secret.
+ANALYTICS_ENV_NAMES = %w[GOOGLE_ANALYTICS_TAG_ID META_PIXEL_ID].freeze
 
 # Names this application's runtime does not read, so a manifest declaring one
 # of them is dead configuration carried over from the reference by mistake
@@ -403,9 +410,44 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   storefront_env = storefront_container.fetch('env', [])
   storefront_names = storefront_env.map { |e| e['name'] }
   expected_storefront_env =
-    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY] + MERCHANT_ENV_NAMES
-  raise 'storefront env must be exactly the nine names runtime-config.ts reads' unless
+    %w[MEDUSA_BACKEND_URL MEDUSA_PUBLISHABLE_API_KEY STRIPE_PUBLISHABLE_KEY STORE_OPEN] +
+    ANALYTICS_ENV_NAMES + MERCHANT_ENV_NAMES
+  raise 'storefront env must be exactly the twelve names runtime-config.ts reads' unless
     storefront_names.sort == expected_storefront_env.sort
+
+  # The committed default is closed everywhere that assembles application
+  # runtime configuration. A Secret reference or overlay-dependent value here
+  # would make public exposure depend on private state being present; the base
+  # itself must be safe to apply.
+  application_workloads = {
+    'backend' => resource(documents, 'Deployment', "lousydeal-backend#{suffix}"),
+    'worker' => resource(documents, 'Deployment', "lousydeal-worker#{suffix}"),
+    'storefront' => storefront,
+    'predeploy' => predeploy,
+  }
+  application_workloads.each do |component, workload|
+    container = pod_containers(pod_spec(workload)).first
+    entry = env_entry(container, 'STORE_OPEN')
+    raise "#{environment}/#{component} must default STORE_OPEN to false" unless entry&.fetch('value', nil) == 'false'
+    raise "#{environment}/#{component} STORE_OPEN must be a literal, not private state" if entry.key?('valueFrom')
+  end
+
+  # Only the storefront reads analytics identifiers. The shared base reserves
+  # their exact names with blank literals so no account identifier or Secret
+  # reference lands in this public repository. Orange may patch the live
+  # storefront later; both deploys overlays stay analytics-free meanwhile.
+  analytics_env = storefront_env.to_h { |entry| [entry['name'], entry] }
+  ANALYTICS_ENV_NAMES.each do |name|
+    entry = analytics_env.fetch(name)
+    raise "#{environment}/storefront #{name} must contain no identifier" unless entry.fetch('value', nil) == ''
+    raise "#{environment}/storefront #{name} must not come from a Secret" if entry.key?('valueFrom')
+  end
+  application_workloads.each do |component, workload|
+    next if component == 'storefront'
+    names = pod_containers(pod_spec(workload)).flat_map { |container| container.fetch('env', []).map { |entry| entry['name'] } }
+    leaked = names & ANALYTICS_ENV_NAMES
+    raise "#{environment}/#{component} must not declare #{leaked.join(', ')}" unless leaked.empty?
+  end
 
   # Values, not references, and non-empty. A `secretKeyRef` here would be the
   # old arrangement returning: correct-looking, and an imprint with a hole in
