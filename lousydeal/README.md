@@ -45,8 +45,9 @@ block reaches `backend:9000` over the tunnel directly, never through the
 proxy decision 010's *"reachable only through Cloudflare Access"* describes.
 `/32` is the one address that path actually needs.
 
-**That rule carries two entries now, and index 0 is still the storefront pod
-selector**, not the reference's shape, where index 0 is the CIDR
+**That rule carries three entries now, and index 0 is still the storefront pod
+selector**, followed by the admin CIDR at index 1 and the n8n report peer at
+index 2, not the reference's shape, where index 0 is the CIDR
 (`plepic/base/networkpolicy.yaml:26-44`). Orange's Application for this root
 is already wired (`orange` `main` `fc08f33`,
 `roles/argocd/templates/lousydeal-application.yaml.j2`) and does not render
@@ -54,6 +55,10 @@ the reference template's `replace /spec/ingress/0/from` patch
 (`orange/roles/argocd/templates/plepic-application.yaml.j2:53-66`) against
 `backend` here; it must continue not to, regardless of what it does at index
 1, or it would delete this rule and substitute a private CIDR at index 0.
+The n8n peer requires both `kubernetes.io/metadata.name: n8n` on its namespace
+and `app.kubernetes.io/name: n8n` on its pod, and reaches backend TCP 9000
+only. This is the destination-side seam: O10-B must add n8n egress and its
+private backend binding before a report can be reachable end to end.
 
 ## Resource requests follow measured working sets
 
@@ -105,6 +110,12 @@ full set. `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID` is read through
 `optionalEnv`, not `requireEnv` -- it names a Stripe Dashboard object no row
 in this plan creates yet -- so its `secretKeyRef` carries `optional: true`,
 the same reasoning the reference applies to its own late-bootstrap credential.
+
+`MEEME_REPORT_KEY` and `MEEME_REPORT_TIMEZONE` are likewise optional named
+keys from `runtime-credentials`, projected only into the backend Deployment.
+Both absent disables the report route. Exactly one is invalid and prevents the
+backend from starting; neither the worker, predeploy Job, storefront nor any
+`envFrom` receives either key.
 
 **No `STORE_CORS`, `ADMIN_CORS` or `AUTH_CORS`.** Unlike the reference,
 `runtime.ts`'s own header states these are not required here ("a later row
@@ -426,7 +437,7 @@ knows or asks which environment it is inspecting, which is what lets the two
 overlays be promoted independently -- test on a label, live on merge -- the
 same property the reference's own contract states.
 
-## What T14 must inject
+## Environment-provided Secret keys
 
 Every value below is per-environment configuration this public repository
 does not carry. Registered OpenBao source names follow decision
@@ -436,8 +447,12 @@ application-first, `lousydeal-…` live and `lousydeal-test-…` test.
 | Secret | Keys | Consumed by |
 | --- | --- | --- |
 | `lousydeal{-test}-database-admin` | `POSTGRES_SUPERUSER_PASSWORD`, `MEDUSA_ADMIN_EMAIL`, `MEDUSA_ADMIN_PASSWORD` | PostgreSQL StatefulSet (first key), predeploy Job (other two) |
-| `lousydeal{-test}-runtime-credentials` | `DATABASE_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `COOKIE_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PUBLISHABLE_KEY` | backend, worker, predeploy, storefront |
+| `lousydeal{-test}-runtime-credentials` | `DATABASE_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `COOKIE_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PAYMENT_METHOD_CONFIGURATION_ID`, `STRIPE_PUBLISHABLE_KEY`, `MEEME_REPORT_KEY`, `MEEME_REPORT_TIMEZONE` | backend (report keys only), worker, predeploy, storefront |
 | `lousydeal{-test}-publishable-key` | `publishableKey` | storefront only |
+
+T14 established the pre-existing Secret projections. O10-B must supply the
+two `MEEME_REPORT_*` keys through the same environment-specific runtime
+credentials source before provider reporting can be enabled.
 
 The publishable key is a staged late-bootstrap value, the same shape as the
 reference's: Medusa creates it after the database and backend exist, so it is
@@ -459,8 +474,9 @@ kubectl kustomize lousydeal/overlays/test | kubeconform -strict -summary
 
 This manifest contract checks isolation, pod hardening, the exact
 NetworkPolicy set (including the backend exposure shape above -- the
-storefront's rule fixed at index 0, the admin CIDR rule fixed at index 1, that
-no other workload's policy carries that CIDR by name, and that the backend
+storefront's rule fixed at index 0, the admin CIDR rule fixed at index 1, the
+n8n namespace-and-pod peer fixed at index 2, that no other destination policy
+carries either source, and that the backend
 Service's own port and the storefront's `MEDUSA_BACKEND_URL` agree), the
 required- and forbidden-environment-variable contracts
 (including that `MEDUSA_ADMIN_EMAIL`/`MEDUSA_ADMIN_PASSWORD` reach only the

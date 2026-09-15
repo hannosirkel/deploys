@@ -44,7 +44,7 @@ spec:
 # is the single address the Cloudflare Tunnel connector actually reaches this
 # cluster from.
 #
-# This `ingress:` now carries two rules, and index 0 is still the storefront
+# This `ingress:` carries three rules: index 0 is still the storefront
 # `podSelector` above -- not the reference's shape
 # (`plepic/base/networkpolicy.yaml:26-44`), where index 0 is the `ipBlock` and
 # the pod path is index 1. Orange's Application template patches `replace
@@ -58,6 +58,11 @@ spec:
 # `roles/argocd/templates/lousydeal-application.yaml.j2`) and does not render
 # this patch against `allow-backend-ingress`; it must continue not to,
 # regardless of what it does at index 1.
+#
+# Index 2 is the report seam: it admits a pod that is both in the `n8n`
+# namespace and labelled `app.kubernetes.io/name: n8n`, on the backend port
+# only. This destination-side rule alone does not make the route reachable;
+# O10-B owns n8n's matching egress permission and private backend binding.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -75,6 +80,13 @@ spec:
         - {port: 9000, protocol: TCP}
     - from:
         - ipBlock: {cidr: 192.168.21.2/32}
+      ports:
+        - {port: 9000, protocol: TCP}
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: n8n}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: n8n}
       ports:
         - {port: 9000, protocol: TCP}
 ---

@@ -260,6 +260,7 @@ MERCHANT_ENV_NAMES = %w[
 # below where that requirement is added -- and forbidden on every other
 # workload, backend-image or not, by a separate check further down.
 ADMINISTRATOR_ENV_NAMES = %w[MEDUSA_ADMIN_EMAIL MEDUSA_ADMIN_PASSWORD].freeze
+REPORT_ENVIRONMENT_NAMES = %w[MEEME_REPORT_KEY MEEME_REPORT_TIMEZONE].freeze
 
 def assert_manifest(path, environment:, namespace:, suffix:)
   documents = YAML.load_stream(File.read(path)).compact
@@ -382,6 +383,41 @@ def assert_manifest(path, environment:, namespace:, suffix:)
       env_from_secrets = container.fetch('envFrom', []).filter_map { |e| e.dig('secretRef', 'name') }
       raise "#{workload.dig('metadata', 'name')}/#{container['name']} must not envFrom the administrator Secret (#{env_from_secrets.join(', ')})" if
         env_from_secrets.any? { |name| name.end_with?('-database-admin') }
+    end
+  end
+
+  # The report route is complete-or-disabled, so both of its optional inputs
+  # belong together on the API container alone. A named `secretKeyRef` keeps
+  # the public manifest value-free; `envFrom` is forbidden because it would
+  # expose every runtime credential rather than these two explicit keys.
+  backend = resource(documents, 'Deployment', "lousydeal-backend#{suffix}")
+  backend_container = pod_containers(pod_spec(backend)).find { |container| container['name'] == 'backend' }
+  raise 'backend container is missing' unless backend_container
+  REPORT_ENVIRONMENT_NAMES.each do |report_name|
+    entries = backend_container.fetch('env', []).select { |entry| entry['name'] == report_name }
+    raise "backend #{report_name} must be declared exactly once" unless entries.length == 1
+    expected = {
+      'name' => report_name,
+      'valueFrom' => {
+        'secretKeyRef' => {
+          'name' => "lousydeal#{suffix}-runtime-credentials",
+          'key' => report_name,
+          'optional' => true,
+        },
+      },
+    }
+    raise "backend #{report_name} must be exactly its optional runtime-credentials secretKeyRef" unless entries.first == expected
+  end
+  workloads(documents).each do |workload|
+    pod_containers(pod_spec(workload)).each do |container|
+      names = container.fetch('env', []).map { |entry| entry['name'] }
+      unless workload.equal?(backend) && container.equal?(backend_container)
+        leaked = names & REPORT_ENVIRONMENT_NAMES
+        raise "#{workload.dig('metadata', 'name')}/#{container['name']} must not read #{leaked.join(', ')}" unless leaked.empty?
+      end
+      env_from_secrets = container.fetch('envFrom', []).filter_map { |entry| entry.dig('secretRef', 'name') }
+      raise "#{workload.dig('metadata', 'name')}/#{container['name']} must not envFrom runtime credentials" if
+        env_from_secrets.any? { |secret_name| secret_name.end_with?('-runtime-credentials') }
     end
   end
 
@@ -628,7 +664,7 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   backend_ingress = resource(documents, 'NetworkPolicy', "allow-backend-ingress#{suffix}")
   raise 'allow-backend-ingress must still select only the backend pod' unless
     backend_ingress.dig('spec', 'podSelector') == { 'matchLabels' => { 'app.kubernetes.io/component' => 'backend' } }
-  raise 'backend ingress must carry exactly two rules' unless backend_ingress.dig('spec', 'ingress')&.length == 2
+  raise 'backend ingress must carry exactly three rules' unless backend_ingress.dig('spec', 'ingress')&.length == 3
   raise 'the storefront ingress rule must remain at index 0' unless backend_ingress.dig('spec', 'ingress', 0) == {
     'from' => [{ 'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/component' => 'storefront' } } }],
     'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
@@ -636,6 +672,15 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   raise 'the admin ingress rule must be the second entry, admitting only the base CIDR on the backend port' unless
     backend_ingress.dig('spec', 'ingress', 1) == {
       'from' => [{ 'ipBlock' => { 'cidr' => ADMIN_INGRESS_CIDR } }],
+      'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
+    }
+  n8n_peer = {
+    'namespaceSelector' => { 'matchLabels' => { 'kubernetes.io/metadata.name' => 'n8n' } },
+    'podSelector' => { 'matchLabels' => { 'app.kubernetes.io/name' => 'n8n' } },
+  }
+  raise 'the n8n ingress rule must be the third entry, with namespace and pod selectors on one peer' unless
+    backend_ingress.dig('spec', 'ingress', 2) == {
+      'from' => [n8n_peer],
       'ports' => [{ 'port' => 9000, 'protocol' => 'TCP' }],
     }
   # "and no other workload gains a route": this row's only edit is
@@ -651,6 +696,13 @@ def assert_manifest(path, environment:, namespace:, suffix:)
   leaked = all_policies.reject { |policy| policy.dig('metadata', 'name') == "allow-backend-ingress#{suffix}" }
                         .select { |policy| policy.to_s.include?(ADMIN_INGRESS_CIDR) }
   raise "admin CIDR leaked into #{leaked.map { |p| p.dig('metadata', 'name') }.join(', ')}" unless leaked.empty?
+  n8n_leaks = all_policies.reject { |policy| policy.equal?(backend_ingress) }.flat_map do |policy|
+    policy.dig('spec', 'ingress').to_a.flat_map { |rule| rule.fetch('from', []) }
+  end.select do |peer|
+    peer.dig('namespaceSelector', 'matchLabels', 'kubernetes.io/metadata.name') == 'n8n' ||
+      peer.dig('podSelector', 'matchLabels', 'app.kubernetes.io/name') == 'n8n'
+  end
+  raise 'n8n ingress source leaked into another destination policy' unless n8n_leaks.empty?
 
   broad_rules = all_policies.select { |policy| policy.to_s.include?('0.0.0.0/0') }
   raise 'only named HTTPS egress may be broad' unless broad_rules.map { |p| p.dig('metadata', 'name') } == ["allow-https-egress#{suffix}"]
