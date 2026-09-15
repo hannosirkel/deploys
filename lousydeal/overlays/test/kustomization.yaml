@@ -145,6 +145,10 @@ patches:
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_WEBHOOK_SECRET}}
                   - name: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID
                     valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: STRIPE_PAYMENT_METHOD_CONFIGURATION_ID, optional: true}}
+                  - name: MEEME_REPORT_KEY
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: MEEME_REPORT_KEY, optional: true}}
+                  - name: MEEME_REPORT_TIMEZONE
+                    valueFrom: {secretKeyRef: {name: lousydeal-test-runtime-credentials, key: MEEME_REPORT_TIMEZONE, optional: true}}
   - target:
       kind: Deployment
       name: lousydeal-worker
