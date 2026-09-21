@@ -8,10 +8,10 @@ resources:
 images:
   - name: ghcr.io/hannosirkel/lousydeal-backend
     newName: ghcr.io/hannosirkel/lousydeal-backend
-    digest: sha256:8fa280f3461633e775c686c5a7d09b3622ac49071ec72677f13b4103e13cded0
+    digest: sha256:b10aab2f21778aa5bc5c188afd633eca755744ae25747e79d2368e3ceedbe076
   - name: ghcr.io/hannosirkel/lousydeal-storefront
     newName: ghcr.io/hannosirkel/lousydeal-storefront
-    digest: sha256:ae85862e6b815308827fdf9d2716c270224ee740814b624255797012dfebb524
+    digest: sha256:886fe3103b0b880030b9736b6f3775ca097ae96c242658352e7878bef2b9b45e
 patches:
   # 8131: this environment's slot in the same shared-WireGuard-address
   # sequence `overlays/live/kustomization.yaml` explains. This is the one
