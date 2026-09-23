@@ -2,8 +2,17 @@
 
 `overlays/live` is the single production root. Orange owns its `ai-portal`
 namespace and the Argo CD Application that will point here. No Application
-points at this root yet, so the policy ConfigMap is inert until its workload
-and namespace contract are added.
+points at this root yet, so these resources remain inert until the workload
+and backup contracts are ready.
+
+The root now includes one authenticated MongoDB StatefulSet with a 5 GiB
+persistent volume and a ClusterIP Service. Its root and LibreChat application
+passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
+Secret by Orange's External Secrets contract before the Application is
+created. The database is isolated by default-deny NetworkPolicies; only chat,
+backup, and recovery pods may connect to it. Add a verified backup and restore
+path and a destination-scoped backup egress policy before the first chat
+workload deploys.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
 server-enforced model specifications allow `qwen/qwen3.8-flash` and
@@ -25,5 +34,6 @@ The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no
 credential; `${OPENROUTER_KEY}` resolves from an ESO-managed Secret.
 
-Validate with `bash ai-portal/tests/policy.sh` and
+Validate with `bash ai-portal/tests/policy.sh`,
+`bash ai-portal/tests/mongodb.sh`, and
 `kubectl kustomize ai-portal/overlays/live`.
