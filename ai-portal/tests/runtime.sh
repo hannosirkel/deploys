@@ -35,6 +35,8 @@ raise 'public placeholders must remain reserved' unless env.dig('PORTAL_PUBLIC_O
 end
 raise 'portal must remain ClusterIP-only' unless one(documents, 'Service', 'ai-portal').dig('spec', 'type') == 'ClusterIP'
 raise 'MongoDB must remain scaled down until backup and restore are ready' unless one(documents, 'StatefulSet', 'ai-portal-mongodb').dig('spec', 'replicas') == 0
+ingress = one(documents, 'NetworkPolicy', 'allow-portal-tunnel-ingress')
+raise 'tunnel ingress must remain disabled until Orange supplies the observed host source range' unless ingress.dig('spec', 'podSelector', 'matchLabels') == { 'app.kubernetes.io/component' => 'portal' } && ingress.dig('spec', 'policyTypes') == ['Ingress'] && ingress.dig('spec', 'ingress') == []
 policy = one(documents, 'NetworkPolicy', 'allow-portal-internal-egress')
 raise 'portal egress must be limited to in-cluster peers' unless policy.dig('spec', 'egress').all? { |rule| rule.fetch('to').all? { |peer| !peer.key?('ipBlock') } }
 jwks = one(documents, 'NetworkPolicy', 'allow-portal-access-jwks-egress')
