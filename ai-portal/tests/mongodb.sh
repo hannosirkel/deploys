@@ -15,14 +15,18 @@ def resource(documents, kind, name)
   matches.first
 end
 
-statefulset = resource(documents, 'StatefulSet', 'ai-portal-mongodb')
+statefulset = resource(documents, 'StatefulSet', 'ai-portal-mongodb-store')
+raise 'old zero-replica StatefulSet must be pruned rather than updated across immutable claim templates' if documents.any? { |item| item['kind'] == 'StatefulSet' && item.dig('metadata', 'name') == 'ai-portal-mongodb' }
 pod = statefulset.dig('spec', 'template', 'spec')
 container = pod.fetch('containers').fetch(0)
 raise 'MongoDB must run as a non-root user' unless pod.dig('securityContext', 'runAsNonRoot') == true
 raise 'MongoDB must not mount a service account token' unless pod['automountServiceAccountToken'] == false
 raise 'MongoDB must have a read-only root filesystem' unless container.dig('securityContext', 'readOnlyRootFilesystem') == true
 raise 'MongoDB image must be pinned by digest' unless container['image'].match?(/\Amongo:8\.0\.32@sha256:[0-9a-f]{64}\z/)
-raise 'MongoDB must use an explicit data PVC' unless resource(documents, 'PersistentVolumeClaim', 'ai-portal-mongodb').dig('spec', 'resources', 'requests', 'storage') == '5Gi'
+raise 'MongoDB must not create an unbound PVC while scaled to zero' if documents.any? { |item| item['kind'] == 'PersistentVolumeClaim' && item.dig('metadata', 'name') == 'ai-portal-mongodb' }
+claim = statefulset.dig('spec', 'volumeClaimTemplates', 0)
+raise 'MongoDB must create its 5 GiB data PVC with its first pod' unless claim.dig('metadata', 'name') == 'data' && claim.dig('spec', 'accessModes') == ['ReadWriteOnce'] && claim.dig('spec', 'storageClassName') == 'local-path' && claim.dig('spec', 'resources', 'requests', 'storage') == '5Gi'
+raise 'MongoDB must mount its generated claim' unless container.fetch('volumeMounts').any? { |mount| mount['name'] == 'data' && mount['mountPath'] == '/data/db' }
 raise 'MongoDB must enable root authentication' unless container.fetch('env').any? { |item| item['name'] == 'MONGO_INITDB_ROOT_PASSWORD' && item.dig('valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-mongodb', 'key' => 'root-password' } }
 raise 'MongoDB app credential must come from ESO Secret' unless container.fetch('env').any? { |item| item['name'] == 'MONGO_APP_PASSWORD' && item.dig('valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-mongodb', 'key' => 'app-password' } }
 raise 'MongoDB init must create only LibreChat readWrite user' unless resource(documents, 'ConfigMap', 'ai-portal-mongodb-init').dig('data', '10-librechat-user.js').include?('roles: [{role: "readWrite", db: "LibreChat"}]')

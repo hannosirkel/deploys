@@ -25,7 +25,13 @@ Orange's exact Authentik hostname split-DNS rewrite supplies the private OIDC
 backchannel while preserving the public HTTPS issuer and TLS name.
 
 The root also includes one authenticated MongoDB StatefulSet with a 5 GiB
-persistent volume and a ClusterIP Service. Its root and LibreChat application
+persistent volume claim template and a ClusterIP Service. With zero replicas,
+no claim is created: `local-path` binds only after the first consumer, and an
+unbound standalone claim would block Argo CD's earlier sync wave. The new
+StatefulSet name lets Argo prune the old zero-replica object and create the
+claim-template form without updating an immutable field. On activation
+the first pod creates `data-ai-portal-mongodb-store-0`; the backup runner must use
+that exact claim name. Its root and LibreChat application
 passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
 Secret by Orange's External Secrets contract before the Application is
 created. The database is isolated by default-deny NetworkPolicies; only chat,

@@ -12,21 +12,10 @@ data:
       roles: [{role: "readWrite", db: "LibreChat"}]
     });
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ai-portal-mongodb
-  annotations: {argocd.argoproj.io/sync-wave: "-20"}
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 5Gi
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: ai-portal-mongodb
+  name: ai-portal-mongodb-store
   annotations: {argocd.argoproj.io/sync-wave: "-20"}
 spec:
   replicas: 0
@@ -34,6 +23,15 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: ai-portal-mongodb
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
   template:
     metadata:
       labels:
@@ -105,8 +103,6 @@ spec:
             - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
-        - name: data
-          persistentVolumeClaim: {claimName: ai-portal-mongodb}
         - name: init
           configMap: {name: ai-portal-mongodb-init}
         - name: tmp
