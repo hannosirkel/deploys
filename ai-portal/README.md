@@ -35,8 +35,10 @@ that exact claim name. Its root and LibreChat application
 passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
 Secret by Orange's External Secrets contract before the Application is
 created. The database is isolated by default-deny NetworkPolicies; only chat,
-backup, and recovery pods may connect to it. Add a verified backup and restore
-path and a destination-scoped backup egress policy before the first chat
+backup, and recovery pods may connect to it. Backup pods can reach only TCP 443
+in [Backblaze's published IPv4 ranges](https://www.backblaze.com/computer-backup/docs/backblaze-ip-addresses),
+checked on 2026-09-23. Refresh this list when Backblaze changes it. The backup
+runner and an isolated restore drill must succeed before the first chat
 workload deploys. MongoDB remains at zero replicas until then.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
