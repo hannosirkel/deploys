@@ -37,5 +37,16 @@ raise 'portal must remain ClusterIP-only' unless one(documents, 'Service', 'ai-p
 raise 'MongoDB must remain scaled down until backup and restore are ready' unless one(documents, 'StatefulSet', 'ai-portal-mongodb').dig('spec', 'replicas') == 0
 policy = one(documents, 'NetworkPolicy', 'allow-portal-internal-egress')
 raise 'portal egress must be limited to in-cluster peers' unless policy.dig('spec', 'egress').all? { |rule| rule.fetch('to').all? { |peer| !peer.key?('ipBlock') } }
+jwks = one(documents, 'NetworkPolicy', 'allow-portal-access-jwks-egress')
+raise 'Access key egress must select only portal pods' unless jwks.dig('spec', 'podSelector', 'matchLabels') == { 'app.kubernetes.io/component' => 'portal' }
+raise 'Access key policy must govern egress only' unless jwks.dig('spec', 'policyTypes') == ['Egress']
+rules = jwks.dig('spec', 'egress')
+raise 'Access key policy must have exactly one egress rule' unless rules.length == 1
+raise 'Access key egress must use only HTTPS' unless rules.fetch(0)['ports'] == [{ 'port' => 443, 'protocol' => 'TCP' }]
+peers = rules.fetch(0).fetch('to')
+raise 'Access key egress must use only exact CIDRs' unless peers.all? { |peer| peer.keys == ['ipBlock'] && peer.fetch('ipBlock').keys == ['cidr'] }
+cidrs = peers.map { |peer| peer.fetch('ipBlock').fetch('cidr') }
+expected = %w[173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22]
+raise 'Access key egress must use the reviewed Cloudflare IPv4 ranges' unless cidrs.sort == expected.sort
 puts 'AI Portal runtime image, credentials, probes, and network contracts hold'
 RUBY
