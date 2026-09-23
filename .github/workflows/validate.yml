@@ -34,6 +34,8 @@ jobs:
           bash lousydeal/tests/manifests.sh
           kubectl kustomize lousydeal/overlays/live >/dev/null
           kubectl kustomize lousydeal/overlays/test >/dev/null
+          bash ai-portal/tests/policy.sh
+          kubectl kustomize ai-portal/overlays/live >/dev/null
 
       - name: Download pinned kubeconform and validate schemas
         env:
@@ -60,7 +62,8 @@ jobs:
             plepic/overlays/live \
             plepic/overlays/test \
             lousydeal/overlays/live \
-            lousydeal/overlays/test; do
+            lousydeal/overlays/test \
+            ai-portal/overlays/live; do
             echo "== kubeconform ${overlay}"
             kubectl kustomize "$overlay" \
               | ./kubeconform \

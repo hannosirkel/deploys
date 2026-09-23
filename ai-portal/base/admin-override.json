@@ -1,0 +1,16 @@
+{
+  "modelSpecs": {
+    "enforce": false,
+    "list": []
+  },
+  "endpoints": {
+    "custom": [
+      {
+        "name": "OpenRouter",
+        "models": {
+          "fetch": true
+        }
+      }
+    ]
+  }
+}

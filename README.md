@@ -6,7 +6,7 @@ overlays, tests, and application-specific documentation. Add future
 applications as sibling roots without making the repository root a deployable
 Kustomization.
 
-The repository currently has three sibling application roots:
+The repository currently has four sibling application roots:
 
 - `servitium/` contains the shared Servitium workload definition and its live
   and test overlays.
@@ -15,8 +15,10 @@ The repository currently has three sibling application roots:
   ownership, exposure, secret-bootstrap, promotion, and recovery contracts.
 - `lousydeal/` contains the shared Lousy Deal store stack and isolated live
   and test overlays. See [`lousydeal/README.md`](lousydeal/README.md) for its
-  ownership, exposure, secret-bootstrap, and promotion contracts. No Argo CD
-  Application points at it yet, so it is inert on merge.
+  ownership, exposure, secret-bootstrap, and promotion contracts.
+- `ai-portal/` contains the first LibreChat model policy and a live overlay.
+  Its workload and Argo CD Application are not yet present, so it is inert on
+  merge. See [`ai-portal/README.md`](ai-portal/README.md).
 
 Servitium's two deployable overlays are:
 
@@ -63,7 +65,7 @@ kubectl kustomize lousydeal/overlays/live >/dev/null
 kubectl kustomize lousydeal/overlays/test >/dev/null
 ```
 
-The `Validate` workflow runs all three application roots' checks for pull
+The `Validate` workflow runs all four application roots' checks for pull
 requests and pushes to `main`. The repository root remains non-deployable.
 
 ## Governance
