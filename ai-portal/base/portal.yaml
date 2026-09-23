@@ -1,0 +1,73 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: ai-portal}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-portal
+        app.kubernetes.io/component: portal
+        app.kubernetes.io/part-of: ai-portal
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: portal
+          image: ghcr.io/hannosirkel/ai-portal@sha256:c02e2b2b53075501932c8aaf643d25be9ff88f1c9bd52afe54ae995eb89456c1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - {name: PORTAL_PUBLIC_ORIGIN, value: "https://ai.example.com"}
+            - {name: PORTAL_OIDC_ISSUER, value: "https://authentik.example.com/application/o/ai-portal/"}
+            - {name: PORTAL_OIDC_CLIENT_ID, value: ai-portal}
+            - name: PORTAL_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-runtime, key: client-secret}
+            - name: PORTAL_SESSION_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-runtime, key: session-secret}
+            - {name: PORTAL_ACCESS_ISSUER, value: "https://example.cloudflareaccess.com"}
+            - {name: PORTAL_ACCESS_AUDIENCE, value: example-audience}
+            - {name: PORTAL_CHAT_UPSTREAM_ORIGIN, value: "http://ai-portal-librechat:3080"}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              httpHeaders:
+                - {name: Host, value: ai.example.com}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              httpHeaders:
+                - {name: Host, value: ai.example.com}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-portal
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: ai-portal}
+  ports:
+    - {name: http, port: 8080, targetPort: http, protocol: TCP}

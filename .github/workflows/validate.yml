@@ -36,6 +36,7 @@ jobs:
           kubectl kustomize lousydeal/overlays/test >/dev/null
           bash ai-portal/tests/policy.sh
           bash ai-portal/tests/mongodb.sh
+          bash ai-portal/tests/runtime.sh
           kubectl kustomize ai-portal/overlays/live >/dev/null
 
       - name: Download pinned kubeconform and validate schemas

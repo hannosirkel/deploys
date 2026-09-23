@@ -5,14 +5,24 @@ namespace and the Argo CD Application that will point here. No Application
 points at this root yet, so these resources remain inert until the workload
 and backup contracts are ready.
 
-The root now includes one authenticated MongoDB StatefulSet with a 5 GiB
+The root now pins the portal's published image by digest. Its Deployment reads
+the OIDC client and session key from `ai-portal-runtime`; the public origin,
+issuer, and Access audience are reserved placeholders for Orange's live
+Application patch. The Service is ClusterIP-only. The namespace remains
+default-denied: its current portal egress allows only Authentik and a future
+chat pod. The portal needs a destination-scoped route to Cloudflare Access's
+signing keys and a narrowly sourced tunnel ingress before activation.
+Orange's exact Authentik hostname split-DNS rewrite supplies the private OIDC
+backchannel while preserving the public HTTPS issuer and TLS name.
+
+The root also includes one authenticated MongoDB StatefulSet with a 5 GiB
 persistent volume and a ClusterIP Service. Its root and LibreChat application
 passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
 Secret by Orange's External Secrets contract before the Application is
 created. The database is isolated by default-deny NetworkPolicies; only chat,
 backup, and recovery pods may connect to it. Add a verified backup and restore
 path and a destination-scoped backup egress policy before the first chat
-workload deploys.
+workload deploys. MongoDB remains at zero replicas until then.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
 server-enforced model specifications allow `qwen/qwen3.8-flash` and
@@ -36,4 +46,5 @@ credential; `${OPENROUTER_KEY}` resolves from an ESO-managed Secret.
 
 Validate with `bash ai-portal/tests/policy.sh`,
 `bash ai-portal/tests/mongodb.sh`, and
+`bash ai-portal/tests/runtime.sh`, then
 `kubectl kustomize ai-portal/overlays/live`.
