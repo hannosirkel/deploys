@@ -5,7 +5,7 @@
     "custom": [
       {
         "name": "OpenRouter",
-        "apiKey": "${OPENROUTER_API_KEY}",
+        "apiKey": "${OPENROUTER_KEY}",
         "baseURL": "https://openrouter.ai/api/v1",
         "models": {
           "default": [

@@ -23,7 +23,7 @@ disabled in the workload environment.
 
 The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no
-credential; `${OPENROUTER_API_KEY}` resolves from an ESO-managed Secret.
+credential; `${OPENROUTER_KEY}` resolves from an ESO-managed Secret.
 
 Validate with `bash ai-portal/tests/policy.sh` and
 `kubectl kustomize ai-portal/overlays/live`.
