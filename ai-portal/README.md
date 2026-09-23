@@ -10,8 +10,13 @@ the OIDC client and session key from `ai-portal-runtime`; the public origin,
 issuer, and Access audience are reserved placeholders for Orange's live
 Application patch. The Service is ClusterIP-only. The namespace remains
 default-denied: its current portal egress allows only Authentik and a future
-chat pod. The portal needs a destination-scoped route to Cloudflare Access's
-signing keys and a narrowly sourced tunnel ingress before activation.
+chat pod, plus HTTPS to Cloudflare's published IPv4 ranges for Access signing
+keys. The CIDR list was checked against
+[Cloudflare's published list](https://www.cloudflare.com/ips-v4) on
+2026-09-23 and must be refreshed when that list changes. These ranges are
+shared by other Cloudflare-hosted sites, so the rule limits provider IPs and
+port, not the hostname. A narrowly sourced
+tunnel ingress is still required before activation.
 Orange's exact Authentik hostname split-DNS rewrite supplies the private OIDC
 backchannel while preserving the public HTTPS issuer and TLS name.
 
