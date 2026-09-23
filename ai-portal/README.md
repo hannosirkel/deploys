@@ -16,7 +16,11 @@ keys. The CIDR list was checked against
 2026-09-23 and must be refreshed when that list changes. These ranges are
 shared by other Cloudflare-hosted sites, so the rule limits provider IPs and
 port, not the hostname. A narrowly sourced
-tunnel ingress is still required before activation.
+tunnel ingress is still required before activation. Its dedicated policy
+starts with an empty ingress list; Orange patches the observed host/node source
+range when it activates the Application. Kubernetes cannot distinguish the
+host-run cloudflared process from other processes on that node, so this policy
+must be paired with Orange's host port boundary and the Cloudflare Access gate.
 Orange's exact Authentik hostname split-DNS rewrite supplies the private OIDC
 backchannel while preserving the public HTTPS issuer and TLS name.
 

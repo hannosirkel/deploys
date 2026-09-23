@@ -91,6 +91,18 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-portal-tunnel-ingress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: portal}
+  policyTypes: [Ingress]
+  # Orange patches the observed host/node source range at activation.
+  # NetworkPolicy cannot distinguish cloudflared from other local host processes.
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-portal-access-jwks-egress
 spec:
   podSelector:
