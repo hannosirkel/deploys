@@ -11,7 +11,8 @@ passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
 Secret by Orange's External Secrets contract before the Application is
 created. The database is isolated by default-deny NetworkPolicies; only chat,
 backup, and recovery pods may connect to it. Add a verified backup and restore
-path before the first chat workload deploys.
+path and a destination-scoped backup egress policy before the first chat
+workload deploys.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
 server-enforced model specifications allow `qwen/qwen3.8-flash` and

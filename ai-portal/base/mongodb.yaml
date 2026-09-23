@@ -53,7 +53,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: mongodb
-          image: mongo:8.0.20@sha256:098862b1339f031900ca66cf8fef799e616d6324fa41b9a263f2ec899552c1ef
+          image: mongo:8.0.32@sha256:4968f22d0c6c10ef29952f3e807f62872ba22b3312f25803564fbfc08255efc2
           imagePullPolicy: IfNotPresent
           args:
             - mongod
