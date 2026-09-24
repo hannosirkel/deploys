@@ -50,5 +50,25 @@ raise 'Access key egress must use only exact CIDRs' unless peers.all? { |peer| p
 cidrs = peers.map { |peer| peer.fetch('ipBlock').fetch('cidr') }
 expected = %w[173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22]
 raise 'Access key egress must use the reviewed Cloudflare IPv4 ranges' unless cidrs.sort == expected.sort
+
+chat = one(documents, 'Deployment', 'ai-portal-librechat')
+raise 'LibreChat must remain stopped until its profile bootstrap is ready' unless chat.dig('spec', 'replicas') == 0
+chat_pod = chat.dig('spec', 'template', 'spec')
+chat_container = chat_pod.fetch('containers').fetch(0)
+raise 'LibreChat image must pin v0.8.7 by digest' unless chat_container['image'].match?(%r{\Aghcr\.io/danny-avila/librechat:v0\.8\.7@sha256:[0-9a-f]{64}\z})
+raise 'LibreChat must not receive a service account token' unless chat_pod['automountServiceAccountToken'] == false
+raise 'LibreChat must run as its non-root image user' unless chat_pod.dig('securityContext', 'runAsNonRoot') == true && chat_pod.dig('securityContext', 'runAsUser') == 1000
+raise 'LibreChat must have a read-only root filesystem' unless chat_container.dig('securityContext', 'readOnlyRootFilesystem') == true
+chat_env = chat_container.fetch('env').to_h { |item| [item.fetch('name'), item] }
+raise 'LibreChat must write npm runtime files under tmp' unless chat_env.dig('HOME', 'value') == '/tmp' && chat_env.dig('NPM_CONFIG_CACHE', 'value') == '/tmp/.npm'
+raise 'local password login must be disabled' unless chat_env.dig('ALLOW_EMAIL_LOGIN', 'value') == 'false' && chat_env.dig('ALLOW_REGISTRATION', 'value') == 'false' && chat_env.dig('ALLOW_PASSWORD_RESET', 'value') == 'false'
+raise 'OIDC must require an approved Authentik group' unless chat_env.dig('OPENID_REQUIRED_ROLE', 'value') == 'ai-portal-user,ai-portal-admin' && chat_env.dig('OPENID_REQUIRED_ROLE_PARAMETER_PATH', 'value') == 'groups' && chat_env.dig('OPENID_REQUIRED_ROLE_TOKEN_KIND', 'value') == 'id'
+raise 'OIDC admin must require the admin group' unless chat_env.dig('OPENID_ADMIN_ROLE', 'value') == 'ai-portal-admin' && chat_env.dig('OPENID_ADMIN_ROLE_PARAMETER_PATH', 'value') == 'groups' && chat_env.dig('OPENID_ADMIN_ROLE_TOKEN_KIND', 'value') == 'id'
+raise 'OIDC role sync must use managed groups' unless chat_env.dig('OPENID_ROLE_SYNC_ENABLED', 'value') == 'true' && chat_env.dig('OPENID_ROLE_SYNC_SOURCE', 'value') == 'id' && chat_env.dig('OPENID_ROLE_SYNC_CLAIM', 'value') == 'groups' && chat_env.dig('OPENID_ROLE_SYNC_ROLE_PRIORITY', 'value') == 'ai-portal-user' && chat_env.dig('OPENID_ROLE_SYNC_FALLBACK_ROLE', 'value') == 'USER'
+raise 'LibreChat must use the reviewed subpath' unless chat_env.dig('DOMAIN_CLIENT', 'value') == 'https://ai.example.com/chat' && chat_env.dig('DOMAIN_SERVER', 'value') == 'https://ai.example.com/chat'
+raise 'LibreChat must use the ConfigMap policy' unless chat_env.dig('CONFIG_PATH', 'value') == '/app/librechat.yaml' && chat_container.fetch('volumeMounts').any? { |item| item['mountPath'] == '/app/librechat.yaml' && item['readOnly'] == true }
+raise 'OpenRouter key must come from ESO' unless chat_env.dig('OPENROUTER_KEY', 'valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-openrouter', 'key' => 'api-key' }
+raise 'OIDC client secret must come from ESO' unless chat_env.dig('OPENID_CLIENT_SECRET', 'valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-runtime', 'key' => 'client-secret' }
+raise 'LibreChat must remain ClusterIP-only' unless one(documents, 'Service', 'ai-portal-librechat').dig('spec', 'type') == 'ClusterIP'
 puts 'AI Portal runtime image, credentials, probes, and network contracts hold'
 RUBY

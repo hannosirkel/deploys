@@ -32,9 +32,9 @@ Secret by Orange's External Secrets contract before the first pod starts.
 The database is isolated by default-deny NetworkPolicies; only chat,
 backup, and recovery pods may connect to it. Backup pods can reach only TCP 443
 in [Backblaze's published IPv4 ranges](https://www.backblaze.com/computer-backup/docs/backblaze-ip-addresses),
-checked on 2026-09-23. Refresh this list when Backblaze changes it. The backup
-runner and an isolated restore drill must succeed before the first chat
-workload deploys. The backup CronJob remains suspended during this drill.
+checked on 2026-09-23. Refresh this list when Backblaze changes it. An
+encrypted backup and isolated restore drill passed before the backup schedule
+was enabled. The LibreChat Deployment remains at zero replicas.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
 server-enforced model specifications allow `qwen/qwen3.8-flash` and
@@ -51,6 +51,19 @@ claim to a LibreChat role of the same name, while `USER` remains the
 restricted fallback. `OPENID_ADMIN_ROLE` separately grants `ADMIN` from
 the `ai-portal-admin` claim. Local password registration and login are
 disabled in the workload environment.
+
+The pinned v0.8.7 LibreChat Deployment and ClusterIP Service are staged at
+zero replicas. Its OIDC URL and public origin are reserved placeholders until
+Orange patches them with live values. Existing ESO Secrets supply its
+MongoDB, OpenRouter, and OIDC client credentials. A dedicated
+`ai-portal-librechat` Secret still needs JWT, refresh, credential-encryption,
+and OIDC session keys through OpenBao and ESO. Before raising replicas,
+install and verify the role-scoped override, permit only the required OIDC and
+OpenRouter egress, replace the temporary upload/image volumes with backed-up
+storage or disable attachments, switch the TCP readiness check to an HTTP
+readiness endpoint, and test the `/chat` login and authorization paths over the
+unpublished route. The default-deny policy currently prevents external chat
+egress; only the portal can enter the staged chat Service.
 
 The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no

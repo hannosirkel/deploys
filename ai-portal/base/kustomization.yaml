@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - portal.yaml
   - mongodb.yaml
+  - librechat-runtime.yaml
   - networkpolicy.yaml
 configMapGenerator:
   - name: ai-portal-librechat-policy

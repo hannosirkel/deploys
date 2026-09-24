@@ -1,0 +1,139 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-portal-librechat
+spec:
+  # Profile bootstrap and the remaining runtime secrets must precede activation.
+  replicas: 0
+  selector:
+    matchLabels: {app.kubernetes.io/name: ai-portal-librechat}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-portal-librechat
+        app.kubernetes.io/component: chat
+        app.kubernetes.io/part-of: ai-portal
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: librechat
+          image: ghcr.io/danny-avila/librechat:v0.8.7@sha256:c5db3331b845e1f289f8d04c0c77936c4bbe372f76730a804abc1c37e44d23a9
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              export MONGO_URI="mongodb://librechat:$(node -p
+              'encodeURIComponent(process.env.MONGO_APP_PASSWORD)')@ai-portal-mongodb:27017/LibreChat?authSource=LibreChat";
+              exec npm run backend
+          ports:
+            - {name: http, containerPort: 3080, protocol: TCP}
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: HOME, value: /tmp}
+            - {name: NPM_CONFIG_CACHE, value: /tmp/.npm}
+            - {name: HOST, value: 0.0.0.0}
+            - {name: PORT, value: "3080"}
+            - {name: DOMAIN_CLIENT, value: "https://ai.example.com/chat"}
+            - {name: DOMAIN_SERVER, value: "https://ai.example.com/chat"}
+            - {name: CONFIG_PATH, value: /app/librechat.yaml}
+            - {name: ALLOW_EMAIL_LOGIN, value: "false"}
+            - {name: ALLOW_REGISTRATION, value: "false"}
+            - {name: ALLOW_SOCIAL_LOGIN, value: "true"}
+            - {name: ALLOW_SOCIAL_REGISTRATION, value: "true"}
+            - {name: ALLOW_PASSWORD_RESET, value: "false"}
+            - {name: OPENID_AUTO_REDIRECT, value: "true"}
+            - {name: OPENID_ISSUER, value: "https://authentik.example.com/application/o/ai-portal/"}
+            - {name: OPENID_CLIENT_ID, value: ai-portal}
+            - {name: OPENID_SCOPE, value: "openid profile email groups"}
+            - {name: OPENID_CALLBACK_URL, value: /oauth/openid/callback}
+            - {name: OPENID_REQUIRED_ROLE, value: "ai-portal-user,ai-portal-admin"}
+            - {name: OPENID_REQUIRED_ROLE_PARAMETER_PATH, value: groups}
+            - {name: OPENID_REQUIRED_ROLE_TOKEN_KIND, value: id}
+            - {name: OPENID_ADMIN_ROLE, value: ai-portal-admin}
+            - {name: OPENID_ADMIN_ROLE_PARAMETER_PATH, value: groups}
+            - {name: OPENID_ADMIN_ROLE_TOKEN_KIND, value: id}
+            - {name: OPENID_ROLE_SYNC_ENABLED, value: "true"}
+            - {name: OPENID_ROLE_SYNC_SOURCE, value: id}
+            - {name: OPENID_ROLE_SYNC_CLAIM, value: groups}
+            - {name: OPENID_ROLE_SYNC_ROLE_PRIORITY, value: ai-portal-user}
+            - {name: OPENID_ROLE_SYNC_FALLBACK_ROLE, value: USER}
+            - {name: MEILI_NO_SYNC, value: "true"}
+            - name: MONGO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: ai-portal-mongodb, key: app-password}
+            - name: OPENID_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-runtime, key: client-secret}
+            - name: OPENROUTER_KEY
+              valueFrom:
+                secretKeyRef: {name: ai-portal-openrouter, key: api-key}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-librechat, key: jwt-secret}
+            - name: JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-librechat, key: jwt-refresh-secret}
+            - name: CREDS_KEY
+              valueFrom:
+                secretKeyRef: {name: ai-portal-librechat, key: creds-key}
+            - name: CREDS_IV
+              valueFrom:
+                secretKeyRef: {name: ai-portal-librechat, key: creds-iv}
+            - name: OPENID_SESSION_SECRET
+              valueFrom:
+                secretKeyRef: {name: ai-portal-librechat, key: openid-session-secret}
+          startupProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: policy, mountPath: /app/librechat.yaml, subPath: librechat.yaml, readOnly: true}
+            - {name: images, mountPath: /app/client/public/images}
+            - {name: logs, mountPath: /app/logs}
+            - {name: uploads, mountPath: /app/uploads}
+            - {name: skill, mountPath: /app/skill}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: policy
+          configMap: {name: ai-portal-librechat-policy}
+        - name: images
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: uploads
+          emptyDir: {}
+        - name: skill
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-portal-librechat
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: ai-portal-librechat}
+  ports:
+    - {name: http, port: 3080, targetPort: http, protocol: TCP}
