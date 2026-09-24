@@ -133,30 +133,47 @@ spec:
             # this failure and needs another entry here and in
             # `tests/manifests.sh`.
             #
-            # **`/app/node_modules`, not `/node_modules`.** These ten sat under
-            # `/node_modules` until Medusa 2.20.1. The modules moved; the
-            # policy did not. That release's lockfile nests 80 packages under
-            # the backend workspace instead of hoisting them, so `lousydeal`'s
-            # `backend/Dockerfile` now ships two trees -- `/src/node_modules`
-            # to `/node_modules`, `/src/backend/node_modules` to
-            # `/app/node_modules` -- and every module named below is in the
-            # second one. Re-measured exactly the way the original ten were:
-            # the image built from that fix, run as `--read-only --user
-            # 10001:10001` against a real PostgreSQL and Redis, clears
-            # `npm run predeploy` end to end with these paths, and fails with
-            # ENOENT on `mkdir` for all ten with the old ones. A later bump
-            # that hoists them back would need this list moved again, and
-            # would announce itself the same way this did.
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/payment-stripe/dist/migrations, subPath: payment-stripe, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/auth-emailpass/dist/migrations, subPath: auth-emailpass, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/fulfillment-manual/dist/migrations, subPath: fulfillment-manual, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/notification-local/dist/migrations, subPath: notification-local, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/cache-inmemory/dist/migrations, subPath: cache-inmemory, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/event-bus-redis/dist/migrations, subPath: event-bus-redis, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/locking/dist/migrations, subPath: locking, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
-            - {name: module-migrations, mountPath: /app/node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
+            # **`/node_modules` again, since Medusa 2.21.** From 2.20.1 these
+            # ten sat under `/app/node_modules`, because that release's
+            # lockfile nested them under the backend workspace. `lousydeal`
+            # PR #226 (2026-09-21) took Medusa to 2.21, whose lockfile
+            # hoists them back, and its Dockerfile copies them to
+            # `/node_modules`. This list did not move with them. Every
+            # promotion from then until this fix failed this Sync hook with
+            # ENOENT on `mkdir '/node_modules/@medusajs/<name>/dist/migrations'`,
+            # and Argo kept both environments on the last image built before
+            # #226 for three days. The paragraph this replaces predicted
+            # exactly that: "a later bump that hoists them back would need
+            # this list moved again, and would announce itself the same way".
+            #
+            # Re-measured on 2026-09-24 against the image live was being asked
+            # to run (`lousydeal-backend@sha256:65bc0c7f...`), under
+            # `podman run --read-only --tmpfs /tmp --user 10001:10001` with
+            # real PostgreSQL 17.10 and Redis 7.4.6, placeholder credentials,
+            # and the Job's SMTP and Printful variables set:
+            #
+            # - with these ten at `/app/node_modules`, `medusa db:migrate`
+            #   exits 1 with the cluster's errors;
+            # - at `/node_modules`, the whole of `npm run predeploy` exits 0,
+            #   through `seed:merch`;
+            # - dropping one mount at a time, eight are still needed. Without
+            #   `fulfillment-manual` or `notification-local` the migrate
+            #   passes, because with Printful and SMTP configured neither
+            #   default provider loads. They are kept. They cost nothing,
+            #   and a Job run without Printful or SMTP would need them.
+            #
+            # A later bump that nests them again moves this list back, and
+            # announces itself the same way.
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/payment-stripe/dist/migrations, subPath: payment-stripe, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/auth-emailpass/dist/migrations, subPath: auth-emailpass, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/fulfillment-manual/dist/migrations, subPath: fulfillment-manual, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/notification-local/dist/migrations, subPath: notification-local, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/cache-inmemory/dist/migrations, subPath: cache-inmemory, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/event-bus-redis/dist/migrations, subPath: event-bus-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking/dist/migrations, subPath: locking, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/locking-redis/dist/migrations, subPath: locking-redis, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/file/dist/migrations, subPath: file, readOnly: true}
+            - {name: module-migrations, mountPath: /node_modules/@medusajs/file-local/dist/migrations, subPath: file-local, readOnly: true}
             # **An eleventh, and the first that is not a package.** LD-04's
             # Printful fulfilment provider is this repository's own code, at
             # `/app/src/modules/printful`, and the Migrator treats it exactly
