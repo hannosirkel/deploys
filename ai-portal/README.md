@@ -1,9 +1,8 @@
 # AI Portal GitOps state
 
 `overlays/live` is the single production root. Orange owns its `ai-portal`
-namespace and the Argo CD Application that will point here. No Application
-points at this root yet, so these resources remain inert until the workload
-and backup contracts are ready.
+namespace and the Argo CD Application that points here. The application is
+deployed while its public Cloudflare route remains unpublished.
 
 The root now pins the portal's published image by digest. Its Deployment reads
 the OIDC client and session key from `ai-portal-runtime`; the public origin,
@@ -25,21 +24,17 @@ Orange's exact Authentik hostname split-DNS rewrite supplies the private OIDC
 backchannel while preserving the public HTTPS issuer and TLS name.
 
 The root also includes one authenticated MongoDB StatefulSet with a 5 GiB
-persistent volume claim template and a ClusterIP Service. With zero replicas,
-no claim is created: `local-path` binds only after the first consumer, and an
-unbound standalone claim would block Argo CD's earlier sync wave. The new
-StatefulSet name lets Argo prune the old zero-replica object and create the
-claim-template form without updating an immutable field. On activation
-the first pod creates `data-ai-portal-mongodb-store-0`; the backup runner must use
+persistent volume claim template and a ClusterIP Service. Its first pod creates
+`data-ai-portal-mongodb-store-0`; the backup runner must use
 that exact claim name. Its root and LibreChat application
 passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
-Secret by Orange's External Secrets contract before the Application is
-created. The database is isolated by default-deny NetworkPolicies; only chat,
+Secret by Orange's External Secrets contract before the first pod starts.
+The database is isolated by default-deny NetworkPolicies; only chat,
 backup, and recovery pods may connect to it. Backup pods can reach only TCP 443
 in [Backblaze's published IPv4 ranges](https://www.backblaze.com/computer-backup/docs/backblaze-ip-addresses),
 checked on 2026-09-23. Refresh this list when Backblaze changes it. The backup
 runner and an isolated restore drill must succeed before the first chat
-workload deploys. MongoDB remains at zero replicas until then.
+workload deploys. The backup CronJob remains suspended during this drill.
 
 The first LibreChat chat release has one OpenRouter endpoint. The default
 server-enforced model specifications allow `qwen/qwen3.8-flash` and

@@ -34,7 +34,7 @@ raise 'public placeholders must remain reserved' unless env.dig('PORTAL_PUBLIC_O
   raise "#{probe} must address the trusted host" unless value['path'] == '/healthz' && value['httpHeaders'] == [{ 'name' => 'Host', 'value' => 'ai.example.com' }]
 end
 raise 'portal must remain ClusterIP-only' unless one(documents, 'Service', 'ai-portal').dig('spec', 'type') == 'ClusterIP'
-raise 'MongoDB must remain scaled down until backup and restore are ready' unless one(documents, 'StatefulSet', 'ai-portal-mongodb-store').dig('spec', 'replicas') == 0
+raise 'MongoDB must run one replica for the isolated backup drill' unless one(documents, 'StatefulSet', 'ai-portal-mongodb-store').dig('spec', 'replicas') == 1
 ingress = one(documents, 'NetworkPolicy', 'allow-portal-tunnel-ingress')
 raise 'tunnel ingress must remain disabled until Orange supplies the observed host source range' unless ingress.dig('spec', 'podSelector', 'matchLabels') == { 'app.kubernetes.io/component' => 'portal' } && ingress.dig('spec', 'policyTypes') == ['Ingress'] && ingress.dig('spec', 'ingress') == []
 policy = one(documents, 'NetworkPolicy', 'allow-portal-internal-egress')
