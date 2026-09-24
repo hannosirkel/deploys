@@ -59,6 +59,8 @@ raise 'LibreChat image must pin v0.8.7 by digest' unless chat_container['image']
 raise 'LibreChat must not receive a service account token' unless chat_pod['automountServiceAccountToken'] == false
 raise 'LibreChat must run as its non-root image user' unless chat_pod.dig('securityContext', 'runAsNonRoot') == true && chat_pod.dig('securityContext', 'runAsUser') == 1000
 raise 'LibreChat must have a read-only root filesystem' unless chat_container.dig('securityContext', 'readOnlyRootFilesystem') == true
+raise 'LibreChat readiness must wait for its startup state' unless chat_container.dig('readinessProbe', 'httpGet') == { 'path' => '/readyz', 'port' => 'http' }
+raise 'LibreChat liveness must use its dedicated endpoint' unless chat_container.dig('livenessProbe', 'httpGet') == { 'path' => '/livez', 'port' => 'http' }
 chat_env = chat_container.fetch('env').to_h { |item| [item.fetch('name'), item] }
 raise 'LibreChat must write npm runtime files under tmp' unless chat_env.dig('HOME', 'value') == '/tmp' && chat_env.dig('NPM_CONFIG_CACHE', 'value') == '/tmp/.npm'
 raise 'local password login must be disabled' unless chat_env.dig('ALLOW_EMAIL_LOGIN', 'value') == 'false' && chat_env.dig('ALLOW_REGISTRATION', 'value') == 'false' && chat_env.dig('ALLOW_PASSWORD_RESET', 'value') == 'false'

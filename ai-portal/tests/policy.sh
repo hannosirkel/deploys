@@ -32,6 +32,8 @@ assert admin["modelSpecs"] == {"enforce": False, "list": []}
 assert admin["endpoints"]["custom"] == [
     {"name": "OpenRouter", "models": {"fetch": True}}
 ]
+assert base["fileConfig"]["endpoints"]["default"]["disabled"] is True
+assert base["fileConfig"]["endpoints"]["OpenRouter"]["disabled"] is True
 print("AI Portal LibreChat profile policy is bounded to OpenRouter")
 PY
 

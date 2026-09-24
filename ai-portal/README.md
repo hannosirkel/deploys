@@ -41,7 +41,11 @@ server-enforced model specifications allow `qwen/qwen3.8-flash` and
 `~deepseek/deepseek-flash-latest` for `restricted` and `user`. The `admin`
 role override disables specification enforcement and fetches OpenRouter's
 catalogue. Jev 1.13 belongs to a later Decisions API integration, and Qwen
-Image 3 Pro to a separate image feature.
+Image 3 Pro to a separate image feature. The OpenRouter endpoint's file
+uploads are disabled for this text-only release; add backed-up storage before
+enabling attachments later. LibreChat's speech-to-text route bypasses this
+endpoint setting, so the portal proxy must block that upload route before
+chat activation.
 
 The LibreChat bootstrap must install `admin-override.json` as an active
 role-scoped config for `ADMIN` before the chat workload starts. Until then,
@@ -59,11 +63,11 @@ MongoDB, OpenRouter, and OIDC client credentials. A dedicated
 `ai-portal-librechat` Secret still needs JWT, refresh, credential-encryption,
 and OIDC session keys through OpenBao and ESO. Before raising replicas,
 install and verify the role-scoped override, permit only the required OIDC and
-OpenRouter egress, replace the temporary upload/image volumes with backed-up
-storage or disable attachments, switch the TCP readiness check to an HTTP
-readiness endpoint, and test the `/chat` login and authorization paths over the
-unpublished route. The default-deny policy currently prevents external chat
-egress; only the portal can enter the staged chat Service.
+OpenRouter egress, and test the `/chat` login and authorization paths over the
+unpublished route. Readiness uses LibreChat's `/readyz` endpoint, which waits
+for application startup instead of merely accepting a TCP connection. The
+default-deny policy currently prevents external chat egress; only the portal
+can enter the staged chat Service.
 
 The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no

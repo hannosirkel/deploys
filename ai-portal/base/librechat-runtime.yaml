@@ -95,10 +95,10 @@ spec:
             periodSeconds: 10
             failureThreshold: 30
           readinessProbe:
-            tcpSocket: {port: http}
+            httpGet: {path: /readyz, port: http}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket: {port: http}
+            httpGet: {path: /livez, port: http}
             periodSeconds: 30
           resources:
             requests: {cpu: 100m, memory: 512Mi}
