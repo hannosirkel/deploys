@@ -16,6 +16,7 @@ def resource(documents, kind, name)
 end
 
 statefulset = resource(documents, 'StatefulSet', 'ai-portal-mongodb-store')
+raise 'MongoDB must run one replica for the isolated backup drill' unless statefulset.dig('spec', 'replicas') == 1
 raise 'old zero-replica StatefulSet must be pruned rather than updated across immutable claim templates' if documents.any? { |item| item['kind'] == 'StatefulSet' && item.dig('metadata', 'name') == 'ai-portal-mongodb' }
 pod = statefulset.dig('spec', 'template', 'spec')
 container = pod.fetch('containers').fetch(0)
@@ -23,7 +24,7 @@ raise 'MongoDB must run as a non-root user' unless pod.dig('securityContext', 'r
 raise 'MongoDB must not mount a service account token' unless pod['automountServiceAccountToken'] == false
 raise 'MongoDB must have a read-only root filesystem' unless container.dig('securityContext', 'readOnlyRootFilesystem') == true
 raise 'MongoDB image must be pinned by digest' unless container['image'].match?(/\Amongo:8\.0\.32@sha256:[0-9a-f]{64}\z/)
-raise 'MongoDB must not create an unbound PVC while scaled to zero' if documents.any? { |item| item['kind'] == 'PersistentVolumeClaim' && item.dig('metadata', 'name') == 'ai-portal-mongodb' }
+raise 'MongoDB claim must be StatefulSet-owned rather than standalone' if documents.any? { |item| item['kind'] == 'PersistentVolumeClaim' && item.dig('metadata', 'name') == 'ai-portal-mongodb' }
 claim = statefulset.dig('spec', 'volumeClaimTemplates', 0)
 raise 'MongoDB must create its 5 GiB data PVC with its first pod' unless claim.dig('metadata', 'name') == 'data' && claim.dig('spec', 'accessModes') == ['ReadWriteOnce'] && claim.dig('spec', 'storageClassName') == 'local-path' && claim.dig('spec', 'resources', 'requests', 'storage') == '5Gi'
 raise 'MongoDB must mount its generated claim' unless container.fetch('volumeMounts').any? { |mount| mount['name'] == 'data' && mount['mountPath'] == '/data/db' }

@@ -18,7 +18,7 @@ metadata:
   name: ai-portal-mongodb-store
   annotations: {argocd.argoproj.io/sync-wave: "-20"}
 spec:
-  replicas: 0
+  replicas: 1
   serviceName: ai-portal-mongodb
   selector:
     matchLabels:
