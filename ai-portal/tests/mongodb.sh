@@ -45,7 +45,7 @@ raise 'backup egress must be TCP 443 only' unless backup_egress.dig('spec', 'egr
 destinations = backup_egress.dig('spec', 'egress', 0, 'to').map { |peer| peer.fetch('ipBlock').fetch('cidr') }
 raise 'backup egress must target published Backblaze IPv4 ranges only' unless destinations == %w[45.11.36.0/22 104.153.232.0/21 149.137.128.0/20 206.190.208.0/21 207.166.148.0/22]
 ingress = resource(documents, 'NetworkPolicy', 'allow-mongodb-ingress').dig('spec', 'ingress')
-raise 'MongoDB ingress must be limited to chat, backup, and recovery pods' unless ingress.fetch(0).dig('from', 0, 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backup chat recovery]
+raise 'MongoDB ingress must be limited to chat, backup, recovery, and bootstrap pods' unless ingress.fetch(0).dig('from', 0, 'podSelector', 'matchExpressions', 0, 'values').sort == %w[backup bootstrap chat recovery]
 raise 'MongoDB ingress must use only port 27017' unless ingress.fetch(0)['ports'] == [{ 'port' => 27017, 'protocol' => 'TCP' }]
 puts 'AI Portal MongoDB authentication, storage, and network contracts hold'
 RUBY

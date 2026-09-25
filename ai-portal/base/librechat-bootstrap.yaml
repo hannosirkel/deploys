@@ -1,0 +1,127 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-portal-librechat-bootstrap
+  annotations: {argocd.argoproj.io/sync-wave: "-10"}
+data:
+  bootstrap.js: |
+    const fs = require('fs');
+    const adminOverride = JSON.parse(fs.readFileSync('/policy/admin-override.json', 'utf8'));
+    if (
+      adminOverride.modelSpecs?.enforce !== false ||
+      adminOverride.endpoints?.custom?.length !== 1 ||
+      adminOverride.endpoints.custom[0].name !== 'OpenRouter' ||
+      adminOverride.endpoints.custom[0].models?.fetch !== true
+    ) {
+      throw new Error('invalid ADMIN OpenRouter override');
+    }
+
+    const database = db.getSiblingDB('LibreChat');
+    const baseline = {
+      PROMPTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+      BOOKMARKS: { USE: false },
+      MEMORIES: { USE: false, CREATE: false, UPDATE: false, READ: false, OPT_OUT: false },
+      AGENTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+      MULTI_CONVO: { USE: false },
+      TEMPORARY_CHAT: { USE: false },
+      RUN_CODE: { USE: false },
+      WEB_SEARCH: { USE: false },
+      PEOPLE_PICKER: { VIEW_USERS: false, VIEW_GROUPS: false, VIEW_ROLES: false },
+      MARKETPLACE: { USE: false },
+      FILE_SEARCH: { USE: false },
+      FILE_CITATIONS: { USE: false },
+      MCP_SERVERS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false, CONFIGURE_OBO: false },
+      REMOTE_AGENTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+      SKILLS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+      SHARED_LINKS: { CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+    };
+    const ordinary = JSON.parse(JSON.stringify(baseline));
+    ordinary.PROMPTS.USE = true;
+    ordinary.PROMPTS.CREATE = true;
+    ordinary.BOOKMARKS.USE = true;
+    ordinary.MULTI_CONVO.USE = true;
+
+    for (const [name, description, permissions] of [
+      ['USER', 'Restrictive fallback for unassigned accounts', baseline],
+      ['ai-portal-restricted', 'Future restricted chat profile', baseline],
+      ['ai-portal-user', 'Ordinary text chat profile', ordinary],
+    ]) {
+      const result = database.roles.updateOne(
+        { name, tenantId: null },
+        { $set: { name, description, permissions } },
+        { upsert: true },
+      );
+      if (!result.acknowledged) throw new Error(`failed to reconcile role ${name}`);
+    }
+
+    const config = database.configs.updateOne(
+      { principalType: 'role', principalId: 'ADMIN', tenantId: null },
+      { $set: {
+        principalType: 'role', principalId: 'ADMIN', principalModel: 'Role',
+        priority: 100, overrides: adminOverride, tombstones: [],
+        isActive: true, configVersion: 1,
+      } },
+      { upsert: true },
+    );
+    if (!config.acknowledged) throw new Error('failed to reconcile ADMIN override');
+    print('LibreChat role and ADMIN policy bootstrap converged');
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ai-portal-librechat-bootstrap-v1
+  annotations: {argocd.argoproj.io/sync-wave: "-10"}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-portal-librechat-bootstrap
+        app.kubernetes.io/component: bootstrap
+        app.kubernetes.io/part-of: ai-portal
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bootstrap
+          image: mongo:8.0.32@sha256:4968f22d0c6c10ef29952f3e807f62872ba22b3312f25803564fbfc08255efc2
+          imagePullPolicy: IfNotPresent
+          command: [/bin/bash, -ec]
+          args:
+            - >-
+              exec mongosh --quiet --host ai-portal-mongodb --port 27017
+              --username librechat --password "$MONGO_APP_PASSWORD"
+              --authenticationDatabase LibreChat --file /bootstrap/bootstrap.js
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: TMPDIR, value: /tmp}
+            - name: MONGO_APP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: ai-portal-mongodb, key: app-password}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: bootstrap, mountPath: /bootstrap, readOnly: true}
+            - {name: policy, mountPath: /policy, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: bootstrap
+          configMap: {name: ai-portal-librechat-bootstrap}
+        - name: policy
+          configMap: {name: ai-portal-librechat-policy}
+        - name: tmp
+          emptyDir: {}

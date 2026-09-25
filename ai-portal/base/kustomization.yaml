@@ -4,6 +4,7 @@ resources:
   - portal.yaml
   - mongodb.yaml
   - librechat-runtime.yaml
+  - librechat-bootstrap.yaml
   - networkpolicy.yaml
 configMapGenerator:
   - name: ai-portal-librechat-policy
@@ -12,3 +13,5 @@ configMapGenerator:
       - admin-override.json
 generatorOptions:
   disableNameSuffixHash: true
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
