@@ -40,5 +40,11 @@
         }
       }
     ]
+  },
+  "fileConfig": {
+    "endpoints": {
+      "default": {"disabled": true},
+      "OpenRouter": {"disabled": true}
+    }
   }
 }
