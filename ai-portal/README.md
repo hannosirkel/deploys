@@ -68,13 +68,13 @@ The pinned v0.8.7 LibreChat Deployment and ClusterIP Service are staged at
 zero replicas. Its OIDC URL and public origin are reserved placeholders until
 Orange patches them with live values. Existing ESO Secrets supply its
 MongoDB, OpenRouter, OIDC client, and LibreChat runtime credentials. Before
-raising replicas, verify the bootstrap Job in the live cluster, permit only
-the required OIDC and OpenRouter egress, promote the portal image that blocks
+raising replicas, verify the bootstrap Job in the live cluster, provide a
+bounded OpenRouter egress path, promote the portal image that blocks
 uploads, and test the `/chat` login and authorization paths over the
 unpublished route. Readiness uses LibreChat's `/readyz` endpoint, which waits
 for application startup instead of merely accepting a TCP connection. The
-default-deny policy currently prevents external chat egress; only the portal
-can enter the staged chat Service.
+chat NetworkPolicy admits only MongoDB, private Authentik HTTPS, and DNS;
+OpenRouter remains blocked. Only the portal can enter the staged chat Service.
 
 The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no

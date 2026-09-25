@@ -64,6 +64,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-chat-authentik-egress
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: chat}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: authentik}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+              app.kubernetes.io/component: server
+      ports:
+        - {port: 9443, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-backup-https-egress
   annotations: {argocd.argoproj.io/sync-wave: "-20"}
 spec:
