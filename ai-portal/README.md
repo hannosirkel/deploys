@@ -56,14 +56,21 @@ restricted fallback. `OPENID_ADMIN_ROLE` separately grants `ADMIN` from
 the `ai-portal-admin` claim. Local password registration and login are
 disabled in the workload environment.
 
+The `ai-portal-librechat-bootstrap-v1` Job runs after MongoDB is ready and
+before chat starts. It uses the MongoDB app account to reconcile the
+restrictive `USER` fallback, ordinary and future restricted roles, and an
+active `ADMIN` role config from `admin-override.json`. It is safe to rerun.
+Argo CD does not rerun a completed Job when its ConfigMap changes; bump the
+versioned Job name and its test when changing the bootstrap policy. Do not
+replace this reconciliation with an unrecorded admin-panel edit.
+
 The pinned v0.8.7 LibreChat Deployment and ClusterIP Service are staged at
 zero replicas. Its OIDC URL and public origin are reserved placeholders until
 Orange patches them with live values. Existing ESO Secrets supply its
-MongoDB, OpenRouter, and OIDC client credentials. A dedicated
-`ai-portal-librechat` Secret still needs JWT, refresh, credential-encryption,
-and OIDC session keys through OpenBao and ESO. Before raising replicas,
-install and verify the role-scoped override, permit only the required OIDC and
-OpenRouter egress, and test the `/chat` login and authorization paths over the
+MongoDB, OpenRouter, OIDC client, and LibreChat runtime credentials. Before
+raising replicas, verify the bootstrap Job in the live cluster, permit only
+the required OIDC and OpenRouter egress, promote the portal image that blocks
+uploads, and test the `/chat` login and authorization paths over the
 unpublished route. Readiness uses LibreChat's `/readyz` endpoint, which waits
 for application startup instead of merely accepting a TCP connection. The
 default-deny policy currently prevents external chat egress; only the portal

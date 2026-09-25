@@ -23,7 +23,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [chat, backup, recovery]
+                values: [chat, backup, recovery, bootstrap]
       ports:
         - {port: 27017, protocol: TCP}
 ---
@@ -37,7 +37,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [chat, backup, recovery]
+        values: [chat, backup, recovery, bootstrap]
   policyTypes: [Egress]
   egress:
     - to:
