@@ -6,4 +6,4 @@ resources:
 images:
   - name: ghcr.io/hannosirkel/ai-portal
     newName: ghcr.io/hannosirkel/ai-portal
-    digest: sha256:c02e2b2b53075501932c8aaf643d25be9ff88f1c9bd52afe54ae995eb89456c1
+    digest: sha256:850b69773fbba6ac68bd7d1192e997e1136189621e3d6420ed5424d2b349d071
