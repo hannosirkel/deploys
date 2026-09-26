@@ -72,5 +72,19 @@ raise 'LibreChat must use the ConfigMap policy' unless chat_env.dig('CONFIG_PATH
 raise 'OpenRouter key must come from ESO' unless chat_env.dig('OPENROUTER_KEY', 'valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-openrouter', 'key' => 'api-key' }
 raise 'OIDC client secret must come from ESO' unless chat_env.dig('OPENID_CLIENT_SECRET', 'valueFrom', 'secretKeyRef') == { 'name' => 'ai-portal-runtime', 'key' => 'client-secret' }
 raise 'LibreChat must remain ClusterIP-only' unless one(documents, 'Service', 'ai-portal-librechat').dig('spec', 'type') == 'ClusterIP'
+chat_oidc = one(documents, 'NetworkPolicy', 'allow-chat-authentik-egress')
+raise 'OIDC egress must select only chat pods' unless chat_oidc.dig('spec', 'podSelector', 'matchLabels') == { 'app.kubernetes.io/component' => 'chat' }
+expected_oidc_peer = {
+  'namespaceSelector' => { 'matchLabels' => { 'kubernetes.io/metadata.name' => 'authentik' } },
+  'podSelector' => { 'matchLabels' => {
+    'app.kubernetes.io/name' => 'authentik',
+    'app.kubernetes.io/component' => 'server'
+  } }
+}
+expected_oidc_egress = [{
+  'to' => [expected_oidc_peer],
+  'ports' => [{ 'port' => 9443, 'protocol' => 'TCP' }]
+}]
+raise 'OIDC egress must target only the private Authentik server on HTTPS' unless chat_oidc.dig('spec', 'policyTypes') == ['Egress'] && chat_oidc.dig('spec', 'egress') == expected_oidc_egress
 puts 'AI Portal runtime image, credentials, probes, and network contracts hold'
 RUBY
