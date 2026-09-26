@@ -4,7 +4,8 @@
 namespace and the Argo CD Application that points here. The application is
 deployed while its public Cloudflare route remains unpublished.
 
-The root now pins the portal's published image by digest. Its Deployment reads
+The live overlay pins the portal's published image by digest. The Deployment
+reads
 the OIDC client and session key from `ai-portal-runtime`; the public origin,
 issuer, and Access audience are reserved placeholders for Orange's live
 Application patch. The Service is ClusterIP-only. The namespace remains
@@ -30,8 +31,8 @@ that exact claim name. Its root and LibreChat application
 passwords must be seeded in OpenBao and projected as the `ai-portal-mongodb`
 Secret by Orange's External Secrets contract before the first pod starts.
 The database is isolated by default-deny NetworkPolicies; only chat,
-backup, and recovery pods may connect to it. Backup pods can reach only TCP 443
-in [Backblaze's published IPv4 ranges](https://www.backblaze.com/computer-backup/docs/backblaze-ip-addresses),
+backup, recovery, and bootstrap pods may connect to it. Backup pods can reach
+only TCP 443 in [Backblaze's published IPv4 ranges](https://www.backblaze.com/computer-backup/docs/backblaze-ip-addresses),
 checked on 2026-09-23. Refresh this list when Backblaze changes it. An
 encrypted backup and isolated restore drill passed before the backup schedule
 was enabled. The LibreChat Deployment remains at zero replicas.
@@ -84,3 +85,14 @@ Validate with `bash ai-portal/tests/policy.sh`,
 `bash ai-portal/tests/mongodb.sh`, and
 `bash ai-portal/tests/runtime.sh`, then
 `kubectl kustomize ai-portal/overlays/live`.
+
+To promote a published portal image, dispatch the `Promote AI Portal image`
+workflow on deploys `main` with the AI Portal source commit SHA and the digest
+shown by its successful image build. Its `live` environment needs the
+`AI_PORTAL_DEPLOYER_CLIENT_ID` and `AI_PORTAL_DEPLOYER_PRIVATE_KEY` secrets for
+a GitHub App installed on deploys with contents and pull request write access.
+The workflow requires a successful AI Portal image workflow, verifies the
+source tag, changes only the live overlay digest, and opens a PR for review.
+After merging that PR, pin its deploys merge commit in Orange and reconcile the
+AI Portal Application. Keep the public DNS record unpublished until the separate release
+gate is approved.

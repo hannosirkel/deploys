@@ -3,3 +3,7 @@ kind: Kustomization
 namespace: ai-portal
 resources:
   - ../../base
+images:
+  - name: ghcr.io/hannosirkel/ai-portal
+    newName: ghcr.io/hannosirkel/ai-portal
+    digest: sha256:c02e2b2b53075501932c8aaf643d25be9ff88f1c9bd52afe54ae995eb89456c1

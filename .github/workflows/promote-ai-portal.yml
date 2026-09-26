@@ -1,0 +1,155 @@
+name: Promote AI Portal image
+
+'on':
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Published AI Portal main commit SHA
+        required: true
+        type: string
+      digest:
+        description: Published AI Portal image digest (sha256:...)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-portal-image-promotion
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify published source tag and immutable digest
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          curl --fail --silent --show-error --location \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/hannosirkel/ai-portal/actions/workflows/image.yml/runs?head_sha=${SOURCE_SHA}&event=push&per_page=100" \
+            | jq -e --arg sha "$SOURCE_SHA" \
+                '.workflow_runs | any(.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")' \
+                >/dev/null
+          image=ghcr.io/hannosirkel/ai-portal
+          published="$(docker buildx imagetools inspect \
+            "${image}:sha-${SOURCE_SHA}" --format '{{.Manifest.Digest}}')"
+          test "$published" = "$IMAGE_DIGEST"
+          echo "Verified successful source workflow and ${image}@${IMAGE_DIGEST} from ${SOURCE_SHA}" \
+            >>"$GITHUB_STEP_SUMMARY"
+
+  propose:
+    needs: verify
+    runs-on: ubuntu-24.04
+    environment: live
+    permissions: {}
+    steps:
+      - name: Mint deploys-scoped GitHub App token
+        id: app-token
+        env:
+          APP_CLIENT_ID: ${{ secrets.AI_PORTAL_DEPLOYER_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_PORTAL_DEPLOYER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$APP_CLIENT_ID"
+          test -n "$APP_PRIVATE_KEY"
+          umask 077
+          key="$RUNNER_TEMP/ai-portal-deployer.pem"
+          trap 'rm -f -- "$key"' EXIT
+          printf '%s' "$APP_PRIVATE_KEY" >"$key"
+          b64url() {
+            openssl base64 -A | tr '+/' '-_' | tr -d '='
+          }
+          now="$(date +%s)"
+          header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
+          payload="$(jq -cn --arg iss "$APP_CLIENT_ID" \
+            --argjson iat "$((now - 60))" --argjson exp "$((now + 540))" \
+            '{iat:$iat,exp:$exp,iss:$iss}' | b64url)"
+          unsigned="${header}.${payload}"
+          signature="$(printf '%s' "$unsigned" \
+            | openssl dgst -sha256 -sign "$key" -binary | b64url)"
+          jwt="${unsigned}.${signature}"
+          api=https://api.github.com
+          repository=hannosirkel/deploys
+          installation="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer $jwt" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "${api}/repos/${repository}/installation" | jq -er '.id')"
+          token="$(curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer $jwt" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header 'Content-Type: application/json' \
+            --data '{"repositories":["deploys"],"permissions":{"contents":"write","pull_requests":"write"}}' \
+            "${api}/app/installations/${installation}/access_tokens" \
+            | jq -er '.token')"
+          echo "::add-mask::$token"
+          echo "token=$token" >>"$GITHUB_OUTPUT"
+      - name: Check out reviewed GitOps state
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      - name: Update only AI Portal's live image digest
+        env:
+          IMAGE_DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          bash ai-portal/promote-digest.sh "$IMAGE_DIGEST" \
+            ai-portal/overlays/live
+          bash ai-portal/tests/promotion.sh
+          bash ai-portal/tests/runtime.sh
+          git diff --check
+          changed="$(git diff --name-only)"
+          if [[ -z "$changed" ]]; then
+            echo 'Live overlay already pins this digest' >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          test "$changed" = ai-portal/overlays/live/kustomization.yaml
+          test "$(git diff --numstat | cut -f1,2)" = $'1\t1'
+      - name: Open reviewed GitOps promotion PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$(git diff --name-only)" ]]; then
+            exit 0
+          fi
+          branch="promote-ai-portal-${SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add ai-portal/overlays/live/kustomization.yaml
+          test "$(git diff --cached --name-only)" = \
+            ai-portal/overlays/live/kustomization.yaml
+          git diff --cached --check
+          git commit -m "Promote AI Portal ${SOURCE_SHA:0:12} by digest"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${branch}"
+          body="$RUNNER_TEMP/ai-portal-promotion.md"
+          cat >"$body" <<EOF
+          Promote AI Portal source commit \`${SOURCE_SHA}\` at immutable image
+          digest \`${IMAGE_DIGEST}\` into the live GitOps overlay.
+
+          The workflow verified the digest against the published source-commit
+          tag and changed only \`ai-portal/overlays/live/kustomization.yaml\`.
+          Merge this PR before Orange pins the new deploys commit. Public DNS
+          and LibreChat replicas remain unchanged.
+          EOF
+          gh pr create --base main --head "$branch" \
+            --title "Promote AI Portal ${SOURCE_SHA:0:12} image" \
+            --body-file "$body"
