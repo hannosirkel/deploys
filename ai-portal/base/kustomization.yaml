@@ -5,6 +5,7 @@ resources:
   - mongodb.yaml
   - librechat-runtime.yaml
   - librechat-bootstrap.yaml
+  - openrouter-egress.yaml
   - networkpolicy.yaml
 configMapGenerator:
   - name: ai-portal-librechat-policy

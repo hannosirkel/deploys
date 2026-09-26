@@ -17,7 +17,7 @@ endpoints = base["endpoints"]["custom"]
 assert len(endpoints) == 1
 endpoint = endpoints[0]
 assert endpoint["name"] == "OpenRouter"
-assert endpoint["baseURL"] == "https://openrouter.ai/api/v1"
+assert endpoint["baseURL"] == "http://ai-portal-openrouter-egress:8080/api/v1"
 assert endpoint["apiKey"] == "${OPENROUTER_KEY}"
 assert set(endpoint["models"]["default"]) == approved
 assert endpoint["models"]["fetch"] is False
