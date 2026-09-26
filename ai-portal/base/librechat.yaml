@@ -6,7 +6,7 @@
       {
         "name": "OpenRouter",
         "apiKey": "${OPENROUTER_KEY}",
-        "baseURL": "https://openrouter.ai/api/v1",
+        "baseURL": "http://ai-portal-openrouter-egress:8080/api/v1",
         "models": {
           "default": [
             "qwen/qwen3.8-flash",

@@ -48,6 +48,16 @@ enabling attachments later. LibreChat's speech-to-text route bypasses this
 endpoint setting, so the portal proxy must block that upload route before
 chat activation.
 
+LibreChat sends its OpenRouter requests to the fixed in-cluster egress proxy.
+The proxy accepts only model catalogue and text-chat paths, verifies
+`openrouter.ai` upstream TLS, and streams responses without buffering. The
+proxy has provider HTTPS egress within Cloudflare's published IPv4 ranges;
+chat pods can reach only the proxy on TCP 8080. These CIDRs are
+shared with other Cloudflare sites, so hostname and path enforcement belongs
+to the proxy. The proxy has no provider key; LibreChat's ESO Secret supplies it.
+If OpenRouter leaves those ranges, egress fails closed until the policy is
+reviewed and updated.
+
 The LibreChat bootstrap must install `admin-override.json` as an active
 role-scoped config for `ADMIN` before the chat workload starts. Until then,
 the base policy also limits administrators to the two approved chat models.
@@ -69,13 +79,13 @@ The pinned v0.8.7 LibreChat Deployment and ClusterIP Service are staged at
 zero replicas. Its OIDC URL and public origin are reserved placeholders until
 Orange patches them with live values. Existing ESO Secrets supply its
 MongoDB, OpenRouter, OIDC client, and LibreChat runtime credentials. Before
-raising replicas, verify the bootstrap Job in the live cluster, provide a
-bounded OpenRouter egress path, promote the portal image that blocks
+raising replicas, verify the bootstrap Job and OpenRouter proxy in the live
+cluster, promote the portal image that blocks
 uploads, and test the `/chat` login and authorization paths over the
 unpublished route. Readiness uses LibreChat's `/readyz` endpoint, which waits
 for application startup instead of merely accepting a TCP connection. The
-chat NetworkPolicy admits only MongoDB, private Authentik HTTPS, and DNS;
-OpenRouter remains blocked. Only the portal can enter the staged chat Service.
+chat NetworkPolicy admits only MongoDB, private Authentik HTTPS, DNS, and the
+OpenRouter proxy. Only the portal can enter the staged chat Service.
 
 The config files are JSON syntax accepted by LibreChat's YAML parser, so the
 policy test can inspect them without another dependency. They hold no

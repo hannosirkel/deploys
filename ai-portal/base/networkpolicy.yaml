@@ -105,6 +105,69 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-openrouter-egress-ingress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: openrouter-egress}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: chat}
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-chat-openrouter-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: chat}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: openrouter-egress}
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-openrouter-https-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: openrouter-egress}
+  policyTypes: [Egress]
+  # OpenRouter currently resolves inside Cloudflare's published IPv4 ranges.
+  # Hostname/path enforcement is in the fixed reverse proxy, not this CIDR rule.
+  egress:
+    - to:
+        - ipBlock: {cidr: 173.245.48.0/20}
+        - ipBlock: {cidr: 103.21.244.0/22}
+        - ipBlock: {cidr: 103.22.200.0/22}
+        - ipBlock: {cidr: 103.31.4.0/22}
+        - ipBlock: {cidr: 141.101.64.0/18}
+        - ipBlock: {cidr: 108.162.192.0/18}
+        - ipBlock: {cidr: 190.93.240.0/20}
+        - ipBlock: {cidr: 188.114.96.0/20}
+        - ipBlock: {cidr: 197.234.240.0/22}
+        - ipBlock: {cidr: 198.41.128.0/17}
+        - ipBlock: {cidr: 162.158.0.0/15}
+        - ipBlock: {cidr: 104.16.0.0/13}
+        - ipBlock: {cidr: 104.24.0.0/14}
+        - ipBlock: {cidr: 172.64.0.0/13}
+        - ipBlock: {cidr: 131.0.72.0/22}
+      ports:
+        - {port: 443, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-dns-egress
   annotations: {argocd.argoproj.io/sync-wave: "-20"}
 spec:
