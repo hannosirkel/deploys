@@ -47,6 +47,9 @@ uploads are disabled for this text-only release; add backed-up storage before
 enabling attachments later. LibreChat's speech-to-text route bypasses this
 endpoint setting, so the portal proxy must block that upload route before
 chat activation.
+LibreChat's `ENDPOINTS=custom` selects only the configured OpenRouter endpoint;
+the built-in Agents endpoint would require an agent ID and is outside this
+release.
 
 LibreChat sends its OpenRouter requests to the fixed in-cluster egress proxy.
 The proxy accepts only model catalogue and text-chat paths, verifies
