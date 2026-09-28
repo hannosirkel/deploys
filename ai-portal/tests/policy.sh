@@ -24,6 +24,7 @@ assert endpoint["models"]["fetch"] is False
 
 specs = base["modelSpecs"]
 assert specs["enforce"] is True
+assert base["interface"]["modelSelect"] is True
 assert {item["preset"]["model"] for item in specs["list"]} == approved
 assert all(item["preset"]["endpoint"] == "OpenRouter" for item in specs["list"])
 assert len(specs["list"]) == len(approved)

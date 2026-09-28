@@ -50,6 +50,11 @@ chat activation.
 LibreChat's `ENDPOINTS=custom` selects only the configured OpenRouter endpoint;
 the built-in Agents endpoint would require an agent ID and is outside this
 release.
+The model selector is enabled explicitly because the model-spec list otherwise
+hides it. Ordinary profiles remain limited to the two listed specs; the admin
+override can fetch and select OpenRouter's catalogue.
+The policy file is mounted through `subPath`, so a policy edit must also update
+the LibreChat pod-template policy revision annotation to load it in a new pod.
 
 LibreChat sends its OpenRouter requests to the fixed in-cluster egress proxy.
 The proxy accepts only model catalogue and text-chat paths, verifies

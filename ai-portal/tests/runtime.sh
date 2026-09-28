@@ -62,6 +62,7 @@ raise 'LibreChat must have a read-only root filesystem' unless chat_container.di
 raise 'LibreChat readiness must wait for its startup state' unless chat_container.dig('readinessProbe', 'httpGet') == { 'path' => '/readyz', 'port' => 'http' }
 raise 'LibreChat liveness must use its dedicated endpoint' unless chat_container.dig('livenessProbe', 'httpGet') == { 'path' => '/livez', 'port' => 'http' }
 chat_env = chat_container.fetch('env').to_h { |item| [item.fetch('name'), item] }
+raise 'model selector policy change must restart LibreChat' unless chat.dig('spec', 'template', 'metadata', 'annotations', 'ai-portal.example.com/policy-revision') == 'model-selector-v1'
 raise 'LibreChat must write npm runtime files under tmp' unless chat_env.dig('HOME', 'value') == '/tmp' && chat_env.dig('NPM_CONFIG_CACHE', 'value') == '/tmp/.npm'
 raise 'local password login must be disabled' unless chat_env.dig('ALLOW_EMAIL_LOGIN', 'value') == 'false' && chat_env.dig('ALLOW_REGISTRATION', 'value') == 'false' && chat_env.dig('ALLOW_PASSWORD_RESET', 'value') == 'false'
 raise 'OIDC must require an approved Authentik group' unless chat_env.dig('OPENID_REQUIRED_ROLE', 'value') == 'ai-portal-user,ai-portal-admin' && chat_env.dig('OPENID_REQUIRED_ROLE_PARAMETER_PATH', 'value') == 'groups' && chat_env.dig('OPENID_REQUIRED_ROLE_TOKEN_KIND', 'value') == 'id'
