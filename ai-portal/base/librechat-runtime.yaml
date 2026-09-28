@@ -14,6 +14,8 @@ spec:
         app.kubernetes.io/name: ai-portal-librechat
         app.kubernetes.io/component: chat
         app.kubernetes.io/part-of: ai-portal
+      annotations:
+        ai-portal.example.com/policy-revision: model-selector-v1
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
