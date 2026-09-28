@@ -44,6 +44,7 @@ spec:
             - {name: DOMAIN_CLIENT, value: "https://ai.example.com/chat"}
             - {name: DOMAIN_SERVER, value: "https://ai.example.com/chat"}
             - {name: CONFIG_PATH, value: /app/librechat.yaml}
+            - {name: ENDPOINTS, value: custom}
             - {name: ALLOW_EMAIL_LOGIN, value: "false"}
             - {name: ALLOW_REGISTRATION, value: "false"}
             - {name: ALLOW_SOCIAL_LOGIN, value: "true"}
