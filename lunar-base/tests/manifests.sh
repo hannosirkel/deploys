@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Renders both Lunar Base overlays and asserts their behaviour: the
-# environment boundary, the single-process contract, the restricted non-root
-# container, the default-deny policy and the permitted egress. Refuses rather
-# than skips when a tool or an overlay is absent, as the other roots' tests do.
+# Renders the Lunar Base live overlay, the only one, and asserts its
+# behaviour: the single-process contract, the restricted non-root container,
+# the default-deny policy, the permitted egress and the Jev Secret referenced
+# by name only. Refuses rather than skips when a tool or the overlay is absent,
+# as the other roots' tests do.
 
 for tool in kubectl ruby; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -19,25 +20,33 @@ trap 'rm -rf -- "$temporary"' EXIT
 
 cd "$repo_root"
 
-for environment in live test; do
-  overlay="lunar-base/overlays/$environment"
-  test -f "$overlay/kustomization.yaml" || {
-    echo "missing Lunar Base $environment overlay" >&2
-    exit 1
-  }
-  kubectl kustomize "$overlay" >"$temporary/$environment.yaml"
-  test -s "$temporary/$environment.yaml" || {
-    echo "Lunar Base $environment overlay rendered nothing" >&2
-    exit 1
-  }
-done
+# The game has one environment, live, by the operator's decision of
+# 2026-10-11. Nothing below asserts anything about a second overlay, so one
+# that came back would be deployable and unchecked: refuse it here.
+overlays="$(find lunar-base/overlays -mindepth 1 -maxdepth 1 | sort)"
+if [ "$overlays" != 'lunar-base/overlays/live' ]; then
+  echo "lunar-base must have exactly one overlay, live; found: $(echo "$overlays" | tr '\n' ' ')" >&2
+  exit 1
+fi
 
-ruby -ryaml - "$temporary/live.yaml" "$temporary/test.yaml" \
-  lunar-base/overlays/live/kustomization.yaml \
-  lunar-base/overlays/test/kustomization.yaml <<'RUBY'
+overlay='lunar-base/overlays/live'
+test -f "$overlay/kustomization.yaml" || {
+  echo 'missing Lunar Base live overlay' >&2
+  exit 1
+}
+kubectl kustomize "$overlay" >"$temporary/live.yaml"
+test -s "$temporary/live.yaml" || {
+  echo 'Lunar Base live overlay rendered nothing' >&2
+  exit 1
+}
+
+ruby -ryaml - "$temporary/live.yaml" "$overlay/kustomization.yaml" <<'RUBY'
+NAMESPACE = 'lunar-base'
+SERVICE_PORT = 8141
+POLICIES = %w[default-deny allow-game-ingress allow-dns-egress allow-https-egress].freeze
 IMAGE = 'ghcr.io/plepicgames/lunar-base'
 # A digest shape, not a digest value: the bootstrap sentinel and a promoted
-# digest are equally valid, because the two overlays are promoted separately.
+# digest are equally valid, so a promotion never breaks this contract.
 DIGEST_SHAPE = /\Asha256:[0-9a-f]{64}\z/.freeze
 BASE_PATH = '/play/lunar-base'
 LOG_DIR = '/var/lib/lunar-base/games'
@@ -48,7 +57,6 @@ POD_LABELS = {
   'app.kubernetes.io/part-of' => 'lunar-base',
 }.freeze
 GAME_SELECTOR = { 'matchLabels' => { 'app.kubernetes.io/component' => 'game' } }.freeze
-# Reserved names only (RFC 2606). Orange injects the real origins.
 # Documentation ranges only (RFC 5737): unpatched, the ingress admits nobody.
 DOCUMENTATION_RANGE = %r{\A(192\.0\.2|198\.51\.100|203\.0\.113)\.0/24\z}.freeze
 # Every special-use IPv4 block that is not a public address.
@@ -57,6 +65,7 @@ NON_PUBLIC_RANGES = %w[
   192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24
   203.0.113.0/24 224.0.0.0/4 240.0.0.0/4
 ].freeze
+# Reserved names only (RFC 2606). Orange injects the real origins.
 RESERVED_ORIGIN = %r{\Ahttps://([a-z0-9-]+\.)*example\.(com|org|net)\z}.freeze
 
 def check(condition, message)
@@ -75,21 +84,20 @@ def wave(document)
   document.dig('metadata', 'annotations', 'argocd.argoproj.io/sync-wave')
 end
 
-def assert_inventory(documents, namespace, suffix, policies)
+def assert_inventory(documents)
   kinds = documents.map { |item| item['kind'] }.sort
-  expected = (%w[Deployment PersistentVolumeClaim Service] + ['NetworkPolicy'] * policies.length).sort
-  # An HPA, a PodDisruptionBudget, a Secret, a Namespace or an Ingress would
-  # each show up here as an unexpected kind.
-  check(kinds == expected, "#{namespace}: unexpected resource kinds #{kinds.inspect}")
-  check(documents.all? { |item| item.dig('metadata', 'namespace') == namespace },
-        "#{namespace}: a resource is outside the namespace")
+  expected = (%w[Deployment PersistentVolumeClaim Service] + ['NetworkPolicy'] * POLICIES.length).sort
+  # A Secret, an ExternalSecret, an HPA, a PodDisruptionBudget, a Namespace or
+  # an Ingress would each show up here as an unexpected kind.
+  check(kinds == expected, "unexpected resource kinds #{kinds.inspect}")
+  check(documents.all? { |item| item.dig('metadata', 'namespace') == NAMESPACE },
+        "a resource is outside the namespace #{NAMESPACE}")
   names = documents.select { |item| item['kind'] == 'NetworkPolicy' }.map { |item| item.dig('metadata', 'name') }
-  check(names.sort == policies.map { |name| "#{name}#{suffix}" }.sort,
-        "#{namespace}: unexpected NetworkPolicies #{names.inspect}")
+  check(names.sort == POLICIES.sort, "unexpected NetworkPolicies #{names.inspect}")
 end
 
-def assert_deployment(documents, suffix)
-  deployment = resource(documents, 'Deployment', "lunar-base#{suffix}")
+def assert_deployment(documents)
+  deployment = resource(documents, 'Deployment', 'lunar-base')
   spec = deployment.fetch('spec')
   check(spec['replicas'] == 1, 'the game must run exactly one replica')
   check(spec['strategy'] == { 'type' => 'Recreate' }, 'the game must use Recreate')
@@ -134,20 +142,20 @@ def assert_container(container)
   end
 end
 
-def assert_log_volume(documents, pod, container, suffix)
-  claim = resource(documents, 'PersistentVolumeClaim', "lunar-base-games#{suffix}")
+def assert_log_volume(documents, pod, container)
+  claim = resource(documents, 'PersistentVolumeClaim', 'lunar-base-games')
   check(claim.dig('spec', 'accessModes') == ['ReadWriteOnce'], 'log claim access mode mismatch')
   check(claim.dig('spec', 'resources', 'requests', 'storage') == '1Gi', 'log claim size mismatch')
   # local-path binds on first consumer: the claim shares the consumer's wave.
   check(wave(claim) == '0', 'log claim sync wave mismatch')
   check(pod['volumes'] == [{
-    'name' => 'games', 'persistentVolumeClaim' => { 'claimName' => "lunar-base-games#{suffix}" },
+    'name' => 'games', 'persistentVolumeClaim' => { 'claimName' => 'lunar-base-games' },
   }], 'the log claim must be the only volume')
   check(container['volumeMounts'] == [{ 'name' => 'games', 'mountPath' => LOG_DIR }],
         'the log directory must be the only mount, and writable')
 end
 
-def assert_environment(container, jev:)
+def assert_environment(container)
   entries = container.fetch('env')
   literal = entries.reject { |entry| entry.key?('valueFrom') }.to_h { |entry| [entry['name'], entry['value']] }
   origin = literal.delete('LUNAR_ALLOWED_ORIGINS')
@@ -158,34 +166,39 @@ def assert_environment(container, jev:)
     'LUNAR_TRUST_PROXY' => 'true', 'LUNAR_MAX_GAMES' => '20',
     'LUNAR_MAX_CONNECTIONS_PER_ADDRESS' => '8', 'LUNAR_MAX_NEW_GAMES_PER_HOUR' => '10',
   }, "settings mismatch: #{literal.inspect}")
-  references = entries.select { |entry| entry.key?('valueFrom') }
-  expected = if jev
-               [{ 'name' => 'TYPESAFE_API_KEY',
-                  'valueFrom' => { 'secretKeyRef' => { 'name' => JEV_SECRET, 'key' => 'api-key' } } }]
-             else
-               []
-             end
-  check(references == expected, "Secret references mismatch: #{references.inspect}")
   check(container.fetch('envFrom', []).empty?, 'envFrom is forbidden')
 end
 
-def assert_service(documents, suffix, port)
-  service = resource(documents, 'Service', "lunar-base#{suffix}")
+# The Jev key reaches the game by name only: one `secretKeyRef`, and nothing
+# else in the rendered root that names, mounts or defines a Secret.
+def assert_jev_secret(container, rendered)
+  references = container.fetch('env').select { |entry| entry.key?('valueFrom') }
+  check(references == [{
+    'name' => 'TYPESAFE_API_KEY',
+    'valueFrom' => { 'secretKeyRef' => { 'name' => JEV_SECRET, 'key' => 'api-key' } },
+  }], "Secret references mismatch: #{references.inspect}")
+  check(rendered.scan(JEV_SECRET).length == 1, 'the Jev Secret must be named exactly once')
+  check(%w[secretRef secretName imagePullSecrets].none? { |key| rendered.include?(key) },
+        'no other Secret reference is expected')
+end
+
+def assert_service(documents)
+  service = resource(documents, 'Service', 'lunar-base')
   spec = service.fetch('spec')
   check(spec['type'] == 'ClusterIP', 'service must remain ClusterIP')
   check(spec['externalIPs'] == ['192.168.21.2'], 'WireGuard-only service address mismatch')
   check(spec['selector'] == { 'app.kubernetes.io/name' => 'lunar-base' }, 'service selector mismatch')
-  check(spec['ports'] == [{ 'name' => 'http', 'port' => port, 'protocol' => 'TCP', 'targetPort' => 'http' }],
-        "service port must be #{port}")
+  check(spec['ports'] == [{ 'name' => 'http', 'port' => SERVICE_PORT, 'protocol' => 'TCP', 'targetPort' => 'http' }],
+        "service port must be #{SERVICE_PORT}")
   check((%w[externalName loadBalancerIP loadBalancerClass] & spec.keys).empty?,
         'public service exposure is forbidden')
 end
 
-def assert_ingress_policies(documents, suffix)
-  deny = resource(documents, 'NetworkPolicy', "default-deny#{suffix}")
+def assert_ingress_policies(documents)
+  deny = resource(documents, 'NetworkPolicy', 'default-deny')
   check(deny.fetch('spec') == { 'podSelector' => {}, 'policyTypes' => %w[Ingress Egress] },
         'default deny mismatch')
-  ingress = resource(documents, 'NetworkPolicy', "allow-game-ingress#{suffix}")
+  ingress = resource(documents, 'NetworkPolicy', 'allow-game-ingress')
   # Index 0 is the rule Orange replaces `/from` on; it must stay the ipBlock.
   source = ingress.dig('spec', 'ingress', 0, 'from', 0, 'ipBlock', 'cidr').to_s
   check(source.match?(DOCUMENTATION_RANGE),
@@ -203,8 +216,8 @@ def egress_policies(documents)
   documents.select { |item| item['kind'] == 'NetworkPolicy' && item.fetch('spec').key?('egress') }
 end
 
-def assert_live_egress(documents)
-  check(egress_policies(documents).length == 2, 'live must allow exactly DNS and HTTPS egress')
+def assert_egress(documents)
+  check(egress_policies(documents).length == 2, 'the game must allow exactly DNS and HTTPS egress')
   dns = resource(documents, 'NetworkPolicy', 'allow-dns-egress')
   check(dns.fetch('spec') == {
     'podSelector' => GAME_SELECTOR, 'policyTypes' => ['Egress'],
@@ -241,34 +254,19 @@ def assert_image_entry(path)
         "#{path}: image entry mismatch")
 end
 
-def assert_overlay(path, namespace:, suffix:, port:, jev:)
-  documents = YAML.load_stream(File.read(path)).compact
-  policies = %w[default-deny allow-game-ingress] + (jev ? %w[allow-dns-egress allow-https-egress] : [])
-  assert_inventory(documents, namespace, suffix, policies)
-  pod, container = assert_deployment(documents, suffix)
-  assert_container(container)
-  assert_log_volume(documents, pod, container, suffix)
-  assert_environment(container, jev: jev)
-  assert_service(documents, suffix, port)
-  assert_ingress_policies(documents, suffix)
-  if jev
-    assert_live_egress(documents)
-  else
-    # The environment boundary: the test game has no Jev key and no way out.
-    check(egress_policies(documents).empty?, 'the test overlay must allow no egress')
-    rendered = File.read(path)
-    check(!rendered.include?(JEV_SECRET) && !rendered.include?('TYPESAFE_API_KEY'),
-          'the test overlay must not reference the Jev Secret')
-    check(%w[secretKeyRef secretRef secretName imagePullSecrets].none? { |key| rendered.include?(key) },
-          'the test overlay must reference no Secret')
-  end
-  check(!File.read(path).include?('::'), 'IPv6 exposure is forbidden')
-end
-
-live, test, live_kustomization, test_kustomization = ARGV
-assert_overlay(live, namespace: 'lunar-base', suffix: '', port: 8141, jev: true)
-assert_overlay(test, namespace: 'lunar-base-test', suffix: '-test', port: 8151, jev: false)
-assert_image_entry(live_kustomization)
-assert_image_entry(test_kustomization)
+rendered_path, kustomization = ARGV
+rendered = File.read(rendered_path)
+documents = YAML.load_stream(rendered).compact
+assert_inventory(documents)
+pod, container = assert_deployment(documents)
+assert_container(container)
+assert_log_volume(documents, pod, container)
+assert_environment(container)
+assert_jev_secret(container, rendered)
+assert_service(documents)
+assert_ingress_policies(documents)
+assert_egress(documents)
+check(!rendered.include?('::'), 'IPv6 exposure is forbidden')
+assert_image_entry(kustomization)
 puts 'lunar-base manifest contract tests passed'
 RUBY

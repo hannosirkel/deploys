@@ -35,7 +35,7 @@ patches:
             containers:
               - name: game
                 env:
-                  # Live only: this is what turns Jev on. Orange declares the
+                  # This is what turns Jev on. Orange declares the
                   # External Secrets projection that creates `lunar-base-jev`;
                   # this repository never holds the Secret or its value.
                   - name: TYPESAFE_API_KEY
