@@ -34,8 +34,8 @@ The test overlay also adds the name suffix `-test` to every resource.
   as an `externalIP`. There is no Ingress, NodePort or LoadBalancer.
 - **Live HTTPS egress is wide on purpose.** A NetworkPolicy cannot match a host
   name, and the Jev service publishes no fixed range. The rule allows TCP 443
-  to any address outside the private and link-local ranges, which hold the
-  cluster's own networks.
+  to public addresses only: it excludes every special-use IPv4 block, and the
+  private-range exclusions cover the cluster's own networks.
 
 ## What the platform supplies
 
@@ -46,7 +46,7 @@ never enter this repository. The contract test never sees them.
 | --- | --- | --- |
 | Namespaces | `lunar-base`, `lunar-base-test` | With the Restricted Pod Security labels. This root declares no Namespace |
 | Jev Secret | namespace `lunar-base` only | An External Secrets projection that creates the Secret `lunar-base-jev` with the key `api-key`. The live Deployment cannot start without it |
-| Ingress source ranges | NetworkPolicy `allow-game-ingress`, both environments | JSON patch: replace `/spec/ingress/0/from`. The tracked `192.168.0.0/16` is a placeholder |
+| Ingress source ranges | NetworkPolicy `allow-game-ingress`, both environments | JSON patch: replace `/spec/ingress/0/from`. The tracked `192.0.2.0/24` is a documentation range (RFC 5737), so an unpatched Application admits nobody |
 | Allowed origins | Deployment `lunar-base`, container `game`, both environments | Strategic-merge patch on `env`, keyed on `name`: `LUNAR_ALLOWED_ORIGINS`, as a literal `value`. The tracked `https://example.com` and `https://test.example.org` are reserved names that match no real browser |
 | Ports | 8141 (live), 8151 (test) | Reserved in the platform's port list; the public route points at them |
 

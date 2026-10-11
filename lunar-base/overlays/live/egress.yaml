@@ -26,10 +26,10 @@ spec:
 # written here would be wrong the day its DNS answer changes, and the failure
 # would be Jev silently falling back to the built-in player.
 #
-# What can be narrowed is narrowed: the private ranges (which hold the
-# cluster's pod and service networks, `10.42.0.0/16` and `10.43.0.0/16`, and
-# the WireGuard mesh) and the link-local range are excluded, so the game can
-# reach no other workload, node or metadata address through this rule.
+# What can be narrowed is narrowed: every special-use IPv4 block that is not a
+# public address is excluded. The private-range exclusions cover the cluster's
+# own networks, so the game can reach no other workload, node or metadata
+# address through this rule.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -44,9 +44,19 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
+              - 0.0.0.0/8
               - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
               - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
       ports:
         - {port: 443, protocol: TCP}

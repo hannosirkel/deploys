@@ -49,6 +49,14 @@ POD_LABELS = {
 }.freeze
 GAME_SELECTOR = { 'matchLabels' => { 'app.kubernetes.io/component' => 'game' } }.freeze
 # Reserved names only (RFC 2606). Orange injects the real origins.
+# Documentation ranges only (RFC 5737): unpatched, the ingress admits nobody.
+DOCUMENTATION_RANGE = %r{\A(192\.0\.2|198\.51\.100|203\.0\.113)\.0/24\z}.freeze
+# Every special-use IPv4 block that is not a public address.
+NON_PUBLIC_RANGES = %w[
+  0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12
+  192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24
+  203.0.113.0/24 224.0.0.0/4 240.0.0.0/4
+].freeze
 RESERVED_ORIGIN = %r{\Ahttps://([a-z0-9-]+\.)*example\.(com|org|net)\z}.freeze
 
 def check(condition, message)
@@ -100,6 +108,7 @@ def assert_deployment(documents, suffix)
     'seccompProfile' => { 'type' => 'RuntimeDefault' },
   }, 'pod security context mismatch')
   check(pod.fetch('initContainers', []).empty?, 'no init container is expected')
+  check(!pod.key?('imagePullSecrets'), 'no imagePullSecrets is expected')
   check(pod.fetch('containers').length == 1, 'exactly one container is expected')
   [pod, pod.fetch('containers').fetch(0)]
 end
@@ -178,10 +187,13 @@ def assert_ingress_policies(documents, suffix)
         'default deny mismatch')
   ingress = resource(documents, 'NetworkPolicy', "allow-game-ingress#{suffix}")
   # Index 0 is the rule Orange replaces `/from` on; it must stay the ipBlock.
+  source = ingress.dig('spec', 'ingress', 0, 'from', 0, 'ipBlock', 'cidr').to_s
+  check(source.match?(DOCUMENTATION_RANGE),
+        "the ingress placeholder must be a documentation range, got #{source.inspect}")
   check(ingress.fetch('spec') == {
     'podSelector' => GAME_SELECTOR, 'policyTypes' => ['Ingress'],
     'ingress' => [{
-      'from' => [{ 'ipBlock' => { 'cidr' => '192.168.0.0/16' } }],
+      'from' => [{ 'ipBlock' => { 'cidr' => source } }],
       'ports' => [{ 'port' => 4780, 'protocol' => 'TCP' }],
     }],
   }, 'game ingress mismatch')
@@ -205,13 +217,14 @@ def assert_live_egress(documents)
     }],
   }, 'DNS egress mismatch')
   https = resource(documents, 'NetworkPolicy', 'allow-https-egress')
+  except = https.dig('spec', 'egress', 0, 'to', 0, 'ipBlock', 'except').to_a
+  check(except.sort == NON_PUBLIC_RANGES.sort,
+        "HTTPS egress must exclude every non-public range; missing #{(NON_PUBLIC_RANGES - except).inspect}, " \
+        "unexpected #{(except - NON_PUBLIC_RANGES).inspect}")
   check(https.fetch('spec') == {
     'podSelector' => GAME_SELECTOR, 'policyTypes' => ['Egress'],
     'egress' => [{
-      'to' => [{ 'ipBlock' => {
-        'cidr' => '0.0.0.0/0',
-        'except' => %w[10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16],
-      } }],
+      'to' => [{ 'ipBlock' => { 'cidr' => '0.0.0.0/0', 'except' => except } }],
       'ports' => [{ 'port' => 443, 'protocol' => 'TCP' }],
     }],
   }, 'HTTPS egress must be TCP 443 to public addresses only')
@@ -246,7 +259,7 @@ def assert_overlay(path, namespace:, suffix:, port:, jev:)
     rendered = File.read(path)
     check(!rendered.include?(JEV_SECRET) && !rendered.include?('TYPESAFE_API_KEY'),
           'the test overlay must not reference the Jev Secret')
-    check(!rendered.include?('secretKeyRef') && !rendered.include?('secretName'),
+    check(%w[secretKeyRef secretRef secretName imagePullSecrets].none? { |key| rendered.include?(key) },
           'the test overlay must reference no Secret')
   end
   check(!File.read(path).include?('::'), 'IPv6 exposure is forbidden')
