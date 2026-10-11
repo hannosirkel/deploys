@@ -13,7 +13,7 @@ permissions:
 jobs:
   manifests:
     name: Manifests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
         # actions/checkout v7.0.1
@@ -93,7 +93,7 @@ jobs:
 
   shell:
     name: Shell
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
         # actions/checkout v7.0.1
@@ -139,7 +139,7 @@ jobs:
 
   workflows:
     name: Workflows
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
         # actions/checkout v7.0.1
@@ -161,7 +161,7 @@ jobs:
 
   documentation:
     name: Documentation
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Check out repository
         # actions/checkout v7.0.1
