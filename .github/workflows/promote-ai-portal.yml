@@ -22,7 +22,7 @@ concurrency:
 jobs:
   verify:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Verify published source tag and immutable digest
         env:
@@ -48,7 +48,7 @@ jobs:
 
   propose:
     needs: verify
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: live
     permissions: {}
     steps:
