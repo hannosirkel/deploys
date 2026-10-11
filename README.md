@@ -6,7 +6,7 @@ overlays, tests, and application-specific documentation. Add future
 applications as sibling roots without making the repository root a deployable
 Kustomization.
 
-The repository currently has four sibling application roots:
+The repository currently has five sibling application roots:
 
 - `servitium/` contains the shared Servitium workload definition and its live
   and test overlays.
@@ -19,6 +19,9 @@ The repository currently has four sibling application roots:
 - `ai-portal/` contains the first LibreChat model policy and a live overlay.
   Its workload and Argo CD Application are not yet present, so it is inert on
   merge. See [`ai-portal/README.md`](ai-portal/README.md).
+- `lunar-base/` contains the Lunar Base online card game and isolated live
+  and test overlays. Its Argo CD Applications are not yet present, so it is
+  inert on merge. See [`lunar-base/README.md`](lunar-base/README.md).
 
 Servitium's two deployable overlays are:
 
@@ -65,7 +68,15 @@ kubectl kustomize lousydeal/overlays/live >/dev/null
 kubectl kustomize lousydeal/overlays/test >/dev/null
 ```
 
-The `Validate` workflow runs all four application roots' checks for pull
+Validate Lunar Base locally with:
+
+```bash
+bash lunar-base/tests/manifests.sh
+kubectl kustomize lunar-base/overlays/live >/dev/null
+kubectl kustomize lunar-base/overlays/test >/dev/null
+```
+
+The `Validate` workflow runs all five application roots' checks for pull
 requests and pushes to `main`. The repository root remains non-deployable.
 
 ## Governance

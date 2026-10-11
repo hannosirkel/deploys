@@ -1,0 +1,15 @@
+---
+# `ClusterIP` with the Orange WireGuard address as its only `externalIP`: no
+# Ingress, NodePort or LoadBalancer. Each overlay replaces the port with its
+# own slot on that shared address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lunar-base
+  annotations: {argocd.argoproj.io/sync-wave: "0"}
+spec:
+  type: ClusterIP
+  externalIPs: [192.168.21.2]
+  selector: {app.kubernetes.io/name: lunar-base}
+  ports:
+    - {name: http, port: 4780, targetPort: http, protocol: TCP}

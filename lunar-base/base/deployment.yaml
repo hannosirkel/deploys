@@ -1,0 +1,103 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lunar-base
+  labels: &labels
+    app.kubernetes.io/name: lunar-base
+    app.kubernetes.io/component: game
+    app.kubernetes.io/part-of: lunar-base
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # One replica and `Recreate`, and neither may change: the lobby and every
+  # game live in the memory of this one process, so a second process -- even
+  # for the seconds of a rolling update -- splits the lobby. There is no
+  # autoscaler and no PodDisruptionBudget: with one replica a budget would
+  # block a node drain for ever. See the application's decision 0005.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lunar-base
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # On SIGTERM the server tells each connected player that the game ends,
+      # then closes.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # The log volume is the only writable path; `fsGroup` is what lets the
+        # non-root user write to it.
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: game
+          image: ghcr.io/plepicgames/lunar-base:unpublished
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 4780, protocol: TCP}
+          env:
+            - {name: PORT, value: "4780"}
+            # The server's default is loopback, which no Service can reach.
+            - {name: HOST, value: 0.0.0.0}
+            # The public route keeps this prefix and the server serves under
+            # it. The three probes below carry the same prefix.
+            - {name: LUNAR_BASE_PATH, value: /play/lunar-base}
+            - {name: LUNAR_LOG_DIR, value: /var/lib/lunar-base/games}
+            - {name: LUNAR_LOG_DAYS, value: "30"}
+            # The origins that may open the WebSocket. A reserved RFC 2606
+            # name, as every hostname in this repository is: Orange replaces
+            # it on the Application with the environment's real origins from
+            # the private inventory. Unpatched, the game refuses every real
+            # browser, which is the safe failure.
+            - {name: LUNAR_ALLOWED_ORIGINS, value: "https://example.com"}
+            # The game sits behind the platform's edge proxy and reads the
+            # visitor address from its header.
+            - {name: LUNAR_TRUST_PROXY, value: "true"}
+            # The cost control for Jev (the application's decision 0010).
+            - {name: LUNAR_MAX_GAMES, value: "20"}
+            - {name: LUNAR_MAX_CONNECTIONS_PER_ADDRESS, value: "8"}
+            - {name: LUNAR_MAX_NEW_GAMES_PER_HOUR, value: "10"}
+            # No `TYPESAFE_API_KEY` here. The live overlay adds it from a
+            # Secret; the test overlay never does, so Jev is off in test.
+          # The health endpoint answers from the process alone, so one path
+          # serves all three probes. The server starts in about a second; the
+          # startup probe allows a minute before liveness may restart it.
+          startupProbe:
+            httpGet: {path: /play/lunar-base/healthz, port: http}
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /play/lunar-base/healthz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /play/lunar-base/healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # At most 20 games in memory.
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: games, mountPath: /var/lib/lunar-base/games}
+      volumes:
+        - name: games
+          persistentVolumeClaim:
+            claimName: lunar-base-games

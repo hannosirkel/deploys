@@ -34,6 +34,9 @@ jobs:
           bash lousydeal/tests/manifests.sh
           kubectl kustomize lousydeal/overlays/live >/dev/null
           kubectl kustomize lousydeal/overlays/test >/dev/null
+          bash lunar-base/tests/manifests.sh
+          kubectl kustomize lunar-base/overlays/live >/dev/null
+          kubectl kustomize lunar-base/overlays/test >/dev/null
           bash ai-portal/tests/policy.sh
           bash ai-portal/tests/mongodb.sh
           bash ai-portal/tests/runtime.sh
@@ -68,6 +71,8 @@ jobs:
             plepic/overlays/test \
             lousydeal/overlays/live \
             lousydeal/overlays/test \
+            lunar-base/overlays/live \
+            lunar-base/overlays/test \
             ai-portal/overlays/live; do
             echo "== kubeconform ${overlay}"
             kubectl kustomize "$overlay" \
