@@ -52,8 +52,9 @@ removes the rest.
 Public deployable desired state, one top-level directory per application, which
 Argo CD reconciles into the Orange runtime. The repository root is not a
 deployable Kustomization. The application roots today are `plepic/`,
-`servitium/`, `lousydeal/` and `ai-portal/`. The AI Portal root currently holds
-policy only and has no Argo CD Application. An Argo CD Application reconciles
+`servitium/`, `lousydeal/`, `ai-portal/` and `lunar-base/`. The AI Portal root
+currently holds policy only and has no Argo CD Application. The Lunar Base root
+has no Argo CD Application yet either, so it is inert on merge. An Argo CD Application reconciles
 `lousydeal` as of `orange` `main` `fc08f33`
 (`roles/argocd/templates/lousydeal-application.yaml.j2`)
 -- corrected here as a maintenance fix, not by the row that added it: this
@@ -65,6 +66,7 @@ sentence was already false before this branch touched the file.
 bash plepic/tests/manifests.sh
 bash servitium/tests/manifests.sh
 bash lousydeal/tests/manifests.sh
+bash lunar-base/tests/manifests.sh
 bash ai-portal/tests/policy.sh
 
 kubectl kustomize plepic/overlays/live
@@ -73,6 +75,8 @@ kubectl kustomize servitium/overlays/live
 kubectl kustomize servitium/overlays/test
 kubectl kustomize lousydeal/overlays/live
 kubectl kustomize lousydeal/overlays/test
+kubectl kustomize lunar-base/overlays/live
+kubectl kustomize lunar-base/overlays/test
 kubectl kustomize ai-portal/overlays/live
 ```
 

@@ -1,0 +1,16 @@
+---
+# The game logs: one file per game, deleted by the server after
+# `LUNAR_LOG_DAYS`. Same sync wave as the Deployment that mounts it: K3s
+# `local-path` binds on first consumer, so a claim in an earlier blocking wave
+# would stay Pending and stop the sync.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lunar-base-games
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

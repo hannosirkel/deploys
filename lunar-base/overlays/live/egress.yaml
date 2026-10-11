@@ -1,0 +1,52 @@
+---
+# Live only. The game itself calls nothing; these two policies exist for Jev,
+# which the live game reaches at `api.typesafe.ai` over HTTPS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: game}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+# Why this is as wide as "any public address on 443": a NetworkPolicy peer is
+# an `ipBlock`, a `podSelector` or a `namespaceSelector`, never a host name,
+# and the Jev service publishes no stable range to pin. A looked-up address
+# written here would be wrong the day its DNS answer changes, and the failure
+# would be Jev silently falling back to the built-in player.
+#
+# What can be narrowed is narrowed: the private ranges (which hold the
+# cluster's pod and service networks, `10.42.0.0/16` and `10.43.0.0/16`, and
+# the WireGuard mesh) and the link-local range are excluded, so the game can
+# reach no other workload, node or metadata address through this rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-https-egress
+  annotations: {argocd.argoproj.io/sync-wave: "-20"}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: game}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - {port: 443, protocol: TCP}

@@ -1,0 +1,42 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lunar-base
+resources:
+  - ../../base
+  - egress.yaml
+# The all-zero SHA-256 sentinel names an image that was never built, so a
+# workload that reaches a cluster on it fails to pull. Only the application's
+# release workflow rewrites the `digest:` line, on a merge to its `main`; never
+# edit it by hand. The entry carries exactly `name`, `newName` and `digest`.
+images:
+  - name: ghcr.io/plepicgames/lunar-base
+    newName: ghcr.io/plepicgames/lunar-base
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+patches:
+  - target:
+      kind: Service
+      name: lunar-base
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8141
+  - target:
+      kind: Deployment
+      name: lunar-base
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lunar-base
+      spec:
+        template:
+          spec:
+            containers:
+              - name: game
+                env:
+                  # Live only: this is what turns Jev on. Orange declares the
+                  # External Secrets projection that creates `lunar-base-jev`;
+                  # this repository never holds the Secret or its value.
+                  - name: TYPESAFE_API_KEY
+                    valueFrom: {secretKeyRef: {name: lunar-base-jev, key: api-key}}
