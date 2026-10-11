@@ -54,7 +54,11 @@ Argo CD reconciles into the Orange runtime. The repository root is not a
 deployable Kustomization. The application roots today are `plepic/`,
 `servitium/`, `lousydeal/`, `ai-portal/` and `lunar-base/`. The AI Portal root
 currently holds policy only and has no Argo CD Application. The Lunar Base root
-has no Argo CD Application yet either, so it is inert on merge. An Argo CD Application reconciles
+has one overlay, `live`, by the operator's decision of 2026-10-11: the game has
+no test environment, so its first run in the cluster is in live, behind an
+address nobody is sent to until the shop page links it. It has no Argo CD
+Application yet either, so it is inert on merge. An Argo CD Application
+reconciles
 `lousydeal` as of `orange` `main` `fc08f33`
 (`roles/argocd/templates/lousydeal-application.yaml.j2`)
 -- corrected here as a maintenance fix, not by the row that added it: this
@@ -76,7 +80,6 @@ kubectl kustomize servitium/overlays/test
 kubectl kustomize lousydeal/overlays/live
 kubectl kustomize lousydeal/overlays/test
 kubectl kustomize lunar-base/overlays/live
-kubectl kustomize lunar-base/overlays/test
 kubectl kustomize ai-portal/overlays/live
 ```
 

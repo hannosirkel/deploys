@@ -1,6 +1,6 @@
 ---
 # `ClusterIP` with the Orange WireGuard address as its only `externalIP`: no
-# Ingress, NodePort or LoadBalancer. Each overlay replaces the port with its
+# Ingress, NodePort or LoadBalancer. The live overlay replaces the port with its
 # own slot on that shared address.
 apiVersion: v1
 kind: Service

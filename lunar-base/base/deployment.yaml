@@ -56,7 +56,7 @@ spec:
             - {name: LUNAR_LOG_DAYS, value: "30"}
             # The origins that may open the WebSocket. A reserved RFC 2606
             # name, as every hostname in this repository is: Orange replaces
-            # it on the Application with the environment's real origins from
+            # it on the Application with the real origins from
             # the private inventory. Unpatched, the game refuses every real
             # browser, which is the safe failure.
             - {name: LUNAR_ALLOWED_ORIGINS, value: "https://example.com"}
@@ -68,7 +68,7 @@ spec:
             - {name: LUNAR_MAX_CONNECTIONS_PER_ADDRESS, value: "8"}
             - {name: LUNAR_MAX_NEW_GAMES_PER_HOUR, value: "10"}
             # No `TYPESAFE_API_KEY` here. The live overlay adds it from a
-            # Secret; the test overlay never does, so Jev is off in test.
+            # Secret, so the base alone runs with Jev off.
           # The health endpoint answers from the process alone, so one path
           # serves all three probes. The server starts in about a second; the
           # startup probe allows a minute before liveness may restart it.

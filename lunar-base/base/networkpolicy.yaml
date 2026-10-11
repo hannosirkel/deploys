@@ -10,14 +10,13 @@ spec:
 ---
 # The only way in. `192.0.2.0/24` is a placeholder from a documentation range
 # (TEST-NET-1, RFC 5737), which is never a real host: Orange replaces
-# `/spec/ingress/0/from` on the Application with each environment's real
+# `/spec/ingress/0/from` on the Application with the real
 # source ranges from the private inventory, so the rule at index 0 must stay
 # the `ipBlock` rule. Unpatched, this policy admits nobody, which is the safe
 # failure.
 #
 # The base allows no egress at all. The game calls nothing by itself; the live
-# overlay adds the two egress policies that Jev needs, and the test overlay
-# adds none.
+# overlay adds the two egress policies that Jev needs.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
