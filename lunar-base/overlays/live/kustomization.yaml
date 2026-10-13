@@ -12,7 +12,7 @@ resources:
 images:
   - name: ghcr.io/plepicgames/lunar-base
     newName: ghcr.io/plepicgames/lunar-base
-    digest: sha256:972f7201cff46a1efba0d7e75ff7a2ff40fb5019cbbe343e7b2e91457794c9e9
+    digest: sha256:728f628079b6a6a89d3d36784ec47a4f9382947293b2438bfc5a9b2cb3c4fa61
 patches:
   - target:
       kind: Service
